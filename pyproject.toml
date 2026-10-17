@@ -28,3 +28,6 @@ include = ["mirror", "mirror.*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "slow: needs real TTS model files (skips itself when missing)",
+]
