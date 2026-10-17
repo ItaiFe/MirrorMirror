@@ -1,4 +1,8 @@
-"""Face bus: plain UDP on 127.0.0.1 carrying (State, mouth) messages as JSON."""
+"""Face bus: plain UDP on 127.0.0.1 carrying (State, mouth, viseme) messages as JSON.
+
+The viseme is a mouth-shape letter (see mirror.visemes); a message without one
+(an older sender) means "X", the resting mouth.
+"""
 import json
 import socket
 
@@ -23,12 +27,12 @@ class FaceBus:
         sock.setblocking(False)
         return cls(sock, port)
 
-    def send(self, state: State, mouth: float) -> None:
-        msg = json.dumps({"s": State(state).value, "m": float(mouth)}).encode()
+    def send(self, state: State, mouth: float, viseme: str = "X") -> None:
+        msg = json.dumps({"s": State(state).value, "m": float(mouth), "v": str(viseme)}).encode()
         self._sock.sendto(msg, (HOST, self._port))
 
     def poll(self):
-        """Drain queued messages; return the latest (State, float) or None."""
+        """Drain queued messages; return the latest (State, float, str) or None."""
         latest = None
         while True:
             try:
@@ -37,8 +41,11 @@ class FaceBus:
                 break
             try:
                 d = json.loads(data)
-                latest = (State(d["s"]), float(d["m"]))
-            except (ValueError, KeyError, TypeError):
+                viseme = d.get("v", "X")
+                if not isinstance(viseme, str):
+                    raise TypeError("viseme must be a string")
+                latest = (State(d["s"]), float(d["m"]), viseme)
+            except (ValueError, KeyError, TypeError, AttributeError):
                 continue  # ignore malformed datagrams
         return latest
 

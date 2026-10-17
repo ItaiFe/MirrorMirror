@@ -3,10 +3,15 @@ and a router."""
 from __future__ import annotations
 
 import json
+import logging
 import re
 from typing import Protocol
 
 import numpy as np
+
+from mirror.visemes import VisemeTrack, track_from_alignments
+
+log = logging.getLogger("mirror.tts")
 
 
 class Synth(Protocol):
@@ -24,12 +29,33 @@ def _normalize(audio, rate: int) -> tuple[np.ndarray, int]:
     return a.reshape(-1), int(rate)
 
 
+class _Tracks:
+    """Builds viseme tracks for one voice; warns once if its alignments fail."""
+
+    def __init__(self, voice_name: str):
+        self._voice_name = voice_name
+        self._warned = False
+
+    def build(self, alignments: list[tuple[str, int]] | None, sr: int,
+              total_samples: int) -> VisemeTrack | None:
+        if alignments is None:
+            if not self._warned:
+                log.warning("%s: no phoneme alignments; the mouth falls back to loudness",
+                            self._voice_name)
+                self._warned = True
+            return None
+        return track_from_alignments(alignments, sr, total_samples)
+
+
 class PiperTTS:
     def __init__(self, voice_path: str):
         from piper import PiperVoice  # lazy: heavy optional dep
 
-        self._voice = PiperVoice.load(voice_path)
+        # include_alignments patches the model in memory (needs the `onnx` package,
+        # the piper-tts[alignment] extra); without it, synth_visemes returns no track.
+        self._voice = PiperVoice.load(voice_path, include_alignments=True)
         self._rate = int(self._voice.config.sample_rate)
+        self._tracks = _Tracks(f"piper {voice_path}")
 
     def synth(self, text: str) -> tuple[np.ndarray, int]:
         voice = self._voice
@@ -47,6 +73,58 @@ class PiperTTS:
                     parts.append(np.asarray(chunk.audio_float_array))
             audio = np.concatenate(parts) if parts else np.zeros(0, np.float32)
         return _normalize(audio, self._rate)
+
+    def synth_visemes(self, text: str) -> tuple[np.ndarray, int, VisemeTrack | None]:
+        """Like synth, plus the mouth-shape track from Piper's phoneme alignments."""
+        parts, alignments = [], []
+        for chunk in self._voice.synthesize(text, include_alignments=True):
+            parts.append(np.asarray(chunk.audio_int16_array))
+            if alignments is not None:
+                if chunk.phoneme_alignments is None:
+                    alignments = None
+                else:
+                    alignments.extend((a.phoneme, int(a.num_samples))
+                                      for a in chunk.phoneme_alignments)
+        audio, rate = _normalize(
+            np.concatenate(parts) if parts else np.zeros(0, np.int16), self._rate)
+        return audio, rate, self._tracks.build(alignments, rate, len(audio))
+
+
+def group_phoneme_samples(phonemes: list[str], id_map: dict[str, list[int]],
+                          id_samples) -> list[tuple[str, int]] | None:
+    """Per-phoneme-id sample counts -> [(phoneme, samples)], or None if they don't line up.
+
+    Piper's ids are: BOS, PAD, then each phoneme's ids followed by PAD, then EOS;
+    each PAD is counted with the phoneme before it (as piper itself does).
+    """
+    pad = len(id_map.get("_", []))
+    out, i = [], 0
+    for ph in ["^", *phonemes, "$"]:
+        n = len(id_map.get(ph, [])) + (pad if ph != "$" else 0)
+        out.append((ph, int(np.sum(id_samples[i:i + n]))))
+        i += n
+    return out if i == len(id_samples) else None
+
+
+def _alignment_session(model_path: str, providers: list[str]):
+    """onnxruntime session for a Piper voice, patched in memory to also output the
+    per-phoneme-id durations. Falls back to the plain model if `onnx` is missing."""
+    import onnxruntime  # lazy: heavy optional dep
+
+    model = model_path
+    try:
+        import onnx
+        from piper.patch_voice_with_alignment import add_alignment_output
+
+        proto = onnx.load(model_path)
+        add_alignment_output(proto)
+        model = proto.SerializeToString()
+    except ImportError:
+        log.warning("onnx not installed (piper-tts[alignment]); no alignments for %s",
+                    model_path)
+    except ValueError as e:  # already patched, or no Ceil tensor
+        log.debug("not patching %s for alignments: %s", model_path, e)
+    return onnxruntime.InferenceSession(model, providers=providers)
 
 
 # A Hebrew prefix letter joined to a number by a hyphen or maqaf ("ו-25", "ב־3").
@@ -85,11 +163,11 @@ class PhonikudHebrewTTS:
         # config enum doesn't know. Phonemes are always passed in, so piper's own
         # phonemizer is never used and "text" is a safe stand-in.
         config["phoneme_type"] = "text"
-        self._voice = PiperVoice(
-            session=onnxruntime.InferenceSession(voice_model, providers=cpu),
-            config=PiperConfig.from_dict(config))
+        self._voice = PiperVoice(session=_alignment_session(voice_model, cpu),
+                                 config=PiperConfig.from_dict(config))
         self._known = set(self._voice.config.phoneme_id_map)
         self._rate = int(self._voice.config.sample_rate)
+        self._tracks = _Tracks(f"phonikud {voice_model}")
 
     def phonemes(self, text: str) -> str:
         """IPA for plain Hebrew text (characters the voice doesn't know are dropped)."""
@@ -102,6 +180,21 @@ class PhonikudHebrewTTS:
             return np.zeros(0, np.float32), self._rate
         ids = self._voice.phonemes_to_ids(list(ipa))
         return _normalize(self._voice.phoneme_ids_to_audio(ids), self._rate)
+
+    def synth_visemes(self, text: str) -> tuple[np.ndarray, int, VisemeTrack | None]:
+        """Like synth, plus the mouth-shape track from the voice's phoneme alignments."""
+        ipa = self.phonemes(text)
+        if not ipa:
+            return np.zeros(0, np.float32), self._rate, None
+        phonemes = list(ipa)
+        ids = self._voice.phonemes_to_ids(phonemes)
+        raw, id_samples = self._voice.phoneme_ids_to_audio(ids, include_alignments=True)
+        audio, rate = _normalize(raw, self._rate)
+        alignments = None
+        if id_samples is not None:
+            alignments = group_phoneme_samples(
+                phonemes, self._voice.config.phoneme_id_map, id_samples)
+        return audio, rate, self._tracks.build(alignments, rate, len(audio))
 
 
 class MmsHebrewTTS:
@@ -133,6 +226,16 @@ class TTSRouter:
         engine = self._he if lang == "he" else self._en
         audio, rate = engine.synth(text)
         return _normalize(audio, rate)
+
+    def synth_visemes(self, text: str, lang: str) -> tuple[np.ndarray, int, VisemeTrack | None]:
+        """Audio plus a mouth-shape track; the track is None for engines that can't
+        align phonemes (MMS), and the face then shapes the mouth from loudness."""
+        engine = self._he if lang == "he" else self._en
+        if not hasattr(engine, "synth_visemes"):
+            audio, rate = engine.synth(text)
+            return (*_normalize(audio, rate), None)
+        audio, rate, track = engine.synth_visemes(text)
+        return (*_normalize(audio, rate), track)
 
     def warmup(self) -> None:
         self.synth("hello", "en")

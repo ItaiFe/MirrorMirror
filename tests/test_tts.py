@@ -1,9 +1,13 @@
+import logging
+import sys
+import types
 from pathlib import Path
 
 import numpy as np
 import pytest
 
-from mirror.tts import TTSRouter, prepare_hebrew
+from mirror.tts import TTSRouter, group_phoneme_samples, prepare_hebrew
+from mirror.visemes import VisemeTrack
 
 PIPER_MODEL = Path("models/en_US-lessac-medium.onnx")
 PHONIKUD_MODEL = Path("models/phonikud-1.0.int8.onnx")
@@ -19,6 +23,93 @@ class FakeSynth:
     def synth(self, text):
         self.calls.append(text)
         return self.audio, self.rate
+
+
+class FakeAligningSynth(FakeSynth):
+    def __init__(self, audio, rate, track):
+        super().__init__(audio, rate)
+        self.track = track
+
+    def synth_visemes(self, text):
+        self.calls.append(text)
+        return self.audio, self.rate, self.track
+
+
+def test_router_synth_visemes_returns_engine_track():
+    track = VisemeTrack(np.array([0.0]), ["D"])
+    pcm = np.array([0, 16384], dtype=np.int16)
+    router = TTSRouter(en=FakeAligningSynth(pcm, 22050, track), he=FakeSynth(np.zeros(4)))
+    a, r, t = router.synth_visemes("hello", "en")
+    assert t is track and r == 22050
+    assert a.dtype == np.float32 and a[1] == pytest.approx(0.5)
+
+
+def test_router_synth_visemes_none_for_engine_without_alignments():
+    he = FakeSynth(np.full(4, 0.2, dtype=np.float32), 16000)  # e.g. MMS
+    router = TTSRouter(en=FakeSynth(np.zeros(4)), he=he)
+    a, r, t = router.synth_visemes("שלום", "he")
+    assert t is None and r == 16000 and np.allclose(a, 0.2) and he.calls == ["שלום"]
+
+
+def _fake_piper(monkeypatch, chunks):
+    """Install a fake `piper` module whose voice yields the given chunks."""
+    loads = []
+
+    class Voice:
+        config = types.SimpleNamespace(sample_rate=22050)
+
+        def synthesize(self, text, include_alignments=False):
+            assert include_alignments
+            return iter(chunks)
+
+    def load(path, include_alignments=False):
+        loads.append((path, include_alignments))
+        return Voice()
+
+    module = types.ModuleType("piper")
+    module.PiperVoice = types.SimpleNamespace(load=load)
+    monkeypatch.setitem(sys.modules, "piper", module)
+    return loads
+
+
+def _chunk(n, alignments):
+    al = None if alignments is None else [
+        types.SimpleNamespace(phoneme=p, num_samples=k) for p, k in alignments]
+    return types.SimpleNamespace(audio_int16_array=np.zeros(n, np.int16),
+                                 phoneme_alignments=al)
+
+
+def test_piper_synth_visemes_concatenates_chunks(monkeypatch):
+    loads = _fake_piper(monkeypatch, [_chunk(4410, [("m", 2205), ("a", 2205)]),
+                                      _chunk(4410, [(".", 4410)])])
+    from mirror.tts import PiperTTS
+
+    audio, sr, track = PiperTTS("voice.onnx").synth_visemes("hi")
+    assert loads == [("voice.onnx", True)]
+    assert len(audio) == 8820 and sr == 22050
+    assert track.shapes == ["A", "B", "D", "X"]
+    assert track.end == pytest.approx(0.4)
+
+
+def test_piper_synth_visemes_none_when_alignment_fails(monkeypatch, caplog):
+    _fake_piper(monkeypatch, [_chunk(4410, [("m", 4410)]), _chunk(4410, None)])
+    from mirror.tts import PiperTTS
+
+    tts = PiperTTS("voice.onnx")
+    with caplog.at_level(logging.WARNING, logger="mirror.tts"):
+        for _ in range(2):
+            audio, sr, track = tts.synth_visemes("hi")
+            assert track is None and len(audio) == 8820
+    assert len([r for r in caplog.records if r.levelno == logging.WARNING]) == 1
+
+
+def test_group_phoneme_samples():
+    id_map = {"_": [0], "^": [1], "$": [2], "a": [3], "m": [4, 5]}
+    # ids: ^ _ m(2) _ a _ $
+    samples = np.array([10, 1, 20, 21, 2, 30, 3, 40])
+    assert group_phoneme_samples(["m", "a"], id_map, samples) == [
+        ("^", 11), ("m", 43), ("a", 33), ("$", 40)]
+    assert group_phoneme_samples(["m", "a"], id_map, samples[:-1]) is None
 
 
 def test_router_picks_language():
@@ -113,3 +204,21 @@ def test_phonikud_real():
     assert audio.dtype == np.float32 and audio.ndim == 1
     assert len(audio) / rate > 0.5
     assert 0.01 < np.abs(audio).max() <= 1.0
+
+
+@pytest.mark.slow
+def test_phonikud_alignments_real():
+    pytest.importorskip("phonikud")
+    pytest.importorskip("phonikud_onnx")
+    pytest.importorskip("piper")
+    pytest.importorskip("onnx")
+    if not (PHONIKUD_MODEL.exists() and PHONIKUD_VOICE.exists()):
+        pytest.skip("phonikud models missing")
+    from mirror.tts import PhonikudHebrewTTS
+
+    tts = PhonikudHebrewTTS(str(PHONIKUD_MODEL), str(PHONIKUD_VOICE))
+    audio, sr, track = tts.synth_visemes("מראה מראה שעל הקיר, מי הכי יפה?")
+    assert track is not None
+    assert track.end == pytest.approx(len(audio) / sr)
+    assert track.end - track.times[0] >= 0.9 * len(audio) / sr
+    assert set(track.shapes) <= set("ABCDEFGHX") and {"B", "C", "D"} <= set(track.shapes)

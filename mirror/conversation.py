@@ -11,11 +11,14 @@ from mirror.llm import LLMError
 from mirror.persona import FALLBACK
 from mirror.states import State
 from mirror.stt import STTError
+from mirror.visemes import rms_shape
 from mirror.wake import is_hallucination, match_wake
 
 log = logging.getLogger("mirror.conversation")
 
 _HISTORY_MAX = 6
+HOP_S = 0.02   # the player reports one mouth level per 20 ms hop
+LEAD_S = 0.05  # show each mouth shape slightly before its sound
 
 
 class Controller:
@@ -100,11 +103,17 @@ class Controller:
 
     def _speak(self, text: str, lang: str) -> None:
         self._set_state(State.SPEAKING)
-        samples, sr = self._tts.synth(text, lang)
-        self._player.play(samples, sr, on_level=self._send_mouth)
+        samples, sr, track = self._tts.synth_visemes(text, lang)
+        hop = 0
 
-    def _send_mouth(self, level: float) -> None:
-        _guarded(self._face.send, State.SPEAKING, level)
+        def send_mouth(level: float) -> None:
+            nonlocal hop
+            t = hop * HOP_S + LEAD_S
+            hop += 1
+            shape = track.at(t) if track is not None else rms_shape(level)
+            _guarded(self._face.send, State.SPEAKING, level, shape)
+
+        self._player.play(samples, sr, on_level=send_mouth)
 
     def _listen(self, timeout_s: float) -> None:
         self._deadline = self._clock() + timeout_s

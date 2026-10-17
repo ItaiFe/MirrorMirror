@@ -81,7 +81,7 @@ def run(config_path: str) -> None:
             if msg is not None:
                 if msg[0] != state:
                     log.info("face: %s", msg[0].value)
-                state, target = msg
+                state, target, _viseme = msg  # the procedural mouth ignores the shape
             now = time.monotonic()
             dt, last = now - last, now
             mouth = step_mouth(mouth, target if state is State.SPEAKING else 0.0, dt)

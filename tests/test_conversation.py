@@ -5,6 +5,7 @@ from mirror.llm import LLMError
 from mirror.persona import FALLBACK
 from mirror.states import State
 from mirror.stt import STTError, Transcript
+from mirror.visemes import VisemeTrack
 
 SEG = np.zeros(1600, dtype=np.float32)
 
@@ -36,12 +37,13 @@ class FakeLLM:
 
 
 class FakeTTS:
-    def __init__(self):
+    def __init__(self, track=None):
         self.calls = []
+        self.track = track
 
-    def synth(self, text, lang):
+    def synth_visemes(self, text, lang):
         self.calls.append((text, lang))
-        return np.zeros(2205, dtype=np.float32), 22050  # 0.1 s
+        return np.zeros(2205, dtype=np.float32), 22050, self.track  # 0.1 s
 
 
 class FakePlayer:
@@ -70,8 +72,8 @@ class FakeFace:
     def __init__(self):
         self.msgs = []
 
-    def send(self, state, mouth):
-        self.msgs.append((state, mouth))
+    def send(self, state, mouth, viseme="X"):
+        self.msgs.append((state, mouth, viseme))
 
 
 class Clock:
@@ -118,7 +120,7 @@ def test_listening_timeout_returns_idle():
     ctl.tick()
     assert ctl.state == State.IDLE
     assert p["lights"].states[-1] == State.IDLE
-    assert p["face"].msgs[-1] == (State.IDLE, 0.0)
+    assert p["face"].msgs[-1] == (State.IDLE, 0.0, "X")
 
 
 def test_followup_without_wake():
@@ -223,10 +225,10 @@ def test_stt_failure_in_listening_stays_listening():
 
 def test_tts_failure_goes_idle_without_raising():
     class BrokenOnSecondTTS(FakeTTS):
-        def synth(self, text, lang):
+        def synth_visemes(self, text, lang):
             if self.calls:
                 raise RuntimeError("no voice")
-            return super().synth(text, lang)
+            return super().synth_visemes(text, lang)
 
     ctl, p, _ = make([Transcript("mirror mirror who", "en"),
                       Transcript("and then?", "en"),
@@ -241,8 +243,8 @@ def test_tts_failure_goes_idle_without_raising():
 
 
 class RaisingFace(FakeFace):
-    def send(self, state, mouth):
-        super().send(state, mouth)
+    def send(self, state, mouth, viseme="X"):
+        super().send(state, mouth, viseme)
         raise OSError("bus down")
 
 
@@ -252,7 +254,7 @@ def test_failing_face_bus_never_escapes():
     ctl.on_segment(SEG)  # full answer with every face send raising
     assert ctl.state == State.LISTENING
     assert p["player"].plays == 1
-    assert (State.SPEAKING, 0.9) in p["face"].msgs  # playback not aborted
+    assert (State.SPEAKING, 0.9, "D") in p["face"].msgs  # playback not aborted
     assert p["lights"].states == [State.THINKING, State.SPEAKING, State.LISTENING]
     clock.t += 6.1
     ctl.tick()
@@ -271,7 +273,44 @@ def test_mouth_levels_forwarded():
                      player=FakePlayer(levels=(0.3, 0.8, 0.0)))
     ctl.on_segment(SEG)
     msgs = p["face"].msgs
-    start = msgs.index((State.SPEAKING, 0.0))
-    assert msgs[start + 1:start + 4] == [(State.SPEAKING, 0.3), (State.SPEAKING, 0.8),
-                                         (State.SPEAKING, 0.0)]
-    assert msgs[-1] == (State.LISTENING, 0.0)
+    start = msgs.index((State.SPEAKING, 0.0, "X"))
+    assert [m[:2] for m in msgs[start + 1:start + 4]] == [
+        (State.SPEAKING, 0.3), (State.SPEAKING, 0.8), (State.SPEAKING, 0.0)]
+    assert msgs[-1] == (State.LISTENING, 0.0, "X")
+
+
+def speaking_msgs(face):
+    """Face messages sent during playback (after the SPEAKING state change)."""
+    start = face.msgs.index((State.SPEAKING, 0.0, "X"))
+    return [m for m in face.msgs[start + 1:] if m[0] == State.SPEAKING]
+
+
+def test_controller_forwards_visemes():
+    track = VisemeTrack(np.array([0.0, 0.1]), ["X", "D"])
+    levels = (0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7)
+    ctl, p, _ = make([Transcript("mirror mirror who is fairest", "en")],
+                     tts=FakeTTS(track=track), player=FakePlayer(levels=levels))
+    ctl.on_segment(SEG)
+    msgs = speaking_msgs(p["face"])
+    assert msgs[5] == (State.SPEAKING, 0.6, "D")  # hop 5: t = 0.10 s + 0.05 s lead
+    assert msgs[2] == (State.SPEAKING, 0.3, "X")  # hop 2: t = 0.09 s
+    assert msgs[3] == (State.SPEAKING, 0.4, "D")  # hop 3: t = 0.11 s
+
+
+def test_controller_rms_fallback_when_no_track():
+    levels = (0.0, 0.1, 0.5, 0.9)
+    ctl, p, _ = make([Transcript("mirror mirror who is fairest", "en")],
+                     tts=FakeTTS(track=None), player=FakePlayer(levels=levels))
+    ctl.on_segment(SEG)
+    assert speaking_msgs(p["face"]) == [(State.SPEAKING, 0.0, "X"), (State.SPEAKING, 0.1, "B"),
+                                        (State.SPEAKING, 0.5, "C"), (State.SPEAKING, 0.9, "D")]
+
+
+def test_hop_count_restarts_for_each_reply():
+    track = VisemeTrack(np.array([0.0, 0.1]), ["D", "X"])
+    ctl, p, _ = make([Transcript("mirror mirror who", "en"), Transcript("and then?", "en")],
+                     tts=FakeTTS(track=track), player=FakePlayer(levels=(0.5, 0.5, 0.5, 0.5)))
+    ctl.on_segment(SEG)
+    ctl.on_segment(SEG)
+    shapes = [m[2] for m in p["face"].msgs if m[0] == State.SPEAKING and m[1] == 0.5]
+    assert shapes == ["D", "D", "D", "X"] * 2
