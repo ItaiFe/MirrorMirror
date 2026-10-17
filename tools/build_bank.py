@@ -18,6 +18,7 @@ mouth interior (pixels darker than CAVITY_LUM) is painted pure black.
 import argparse
 import glob
 import os
+import sys
 from typing import Optional
 
 import cv2
@@ -33,9 +34,17 @@ LIP_LADDER = {"A_mild": 0, "A_wide": 0, "B_mild": 1, "B_wide": 2,
               "C_mild": 2, "C_wide": 3, "D_mild": 3, "D_wide": 4}
 EYE_FRAMES = {"open": 0, "half": 1, "closed": 2, "look_up": 3}
 EXTRA_SHAPES = ("E", "F", "G", "H")
+REQUIRED = (["hub.png"] + [f"lip_{i:02d}.png" for i in range(5)]
+            + [f"eye_{i:02d}.png" for i in range(4)])
+MAX_SHIFT_PX = 20.0  # an alignment shift larger than this (full-frame px) is suspicious
 
 
-def align(ref: np.ndarray, img: np.ndarray, ignore: Optional[np.ndarray] = None) -> np.ndarray:
+def warn(msg: str) -> None:
+    print(f"warning: {msg}", file=sys.stderr)
+
+
+def align(ref: np.ndarray, img: np.ndarray, ignore: Optional[np.ndarray] = None,
+          name: str = "frame") -> np.ndarray:
     """Translate `img` (RGB) onto `ref` (RGB, same size), sub-pixel.
 
     `ignore` (uint8 0/1, ref-sized) marks pixels left out of the match, e.g.
@@ -52,8 +61,13 @@ def align(ref: np.ndarray, img: np.ndarray, ignore: Optional[np.ndarray] = None)
     try:
         crit = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 100, 1e-5)
         _, warp = cv2.findTransformECC(a, b, warp, cv2.MOTION_TRANSLATION, crit, mask, 5)
-    except cv2.error:
-        pass  # keep the phase-correlation estimate
+    except cv2.error as e:
+        warn(f"{name}: fine alignment (ECC) failed, using the coarse estimate "
+             f"(may be ~1 px off): {str(e).strip().splitlines()[-1]}")
+    shift = float(np.hypot(warp[0, 2], warp[1, 2]))
+    if shift > MAX_SHIFT_PX:
+        warn(f"{name}: shifted {shift:.1f} px to match hub.png; check that it was "
+             f"rendered from the same source image and crop")
     return cv2.warpAffine(img, warp, ref.shape[1::-1],
                           flags=cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP,
                           borderMode=cv2.BORDER_CONSTANT, borderValue=0)
@@ -109,6 +123,10 @@ def expression(face: np.ndarray, hub: np.ndarray, mask: np.ndarray) -> np.ndarra
 
 def build_bank(raw_dir: str, out_dir: str, box: Optional[sb.Box] = None,
                points: Optional[str] = None) -> str:
+    missing = [n for n in REQUIRED if not os.path.isfile(os.path.join(raw_dir, n))]
+    if missing:
+        raise SystemExit(f"{raw_dir}: missing required frames: {', '.join(missing)}")
+
     def raw(name):
         return sb.read_rgb(os.path.join(raw_dir, name))
 
@@ -127,7 +145,7 @@ def build_bank(raw_dir: str, out_dir: str, box: Optional[sb.Box] = None,
            int(box[0] + mx * k):int(box[0] + (mx + mw) * k)] = 1
 
     def frame(name):
-        return sb.crop_to_size(align(hub_full, raw(name), ignore), box)
+        return sb.crop_to_size(align(hub_full, raw(name), ignore, name), box)
 
     zone = _cavity_zone(layout, m_box)
     lips = {i: frame(f"lip_{i:02d}.png") for i in sorted(set(LIP_LADDER.values()))}

@@ -371,9 +371,17 @@ def write_bank(out_dir: str, hub: np.ndarray, mask: np.ndarray, m_box: Box,
                eyes: Optional[Dict[str, np.ndarray]] = None,
                expressions: Optional[Dict[str, np.ndarray]] = None,
                warps: Optional[Dict[str, np.ndarray]] = None) -> str:
-    """Write a bank directory in the format of assets/face/README.md; returns manifest path."""
+    """Write a bank directory in the format of assets/face/README.md; returns manifest path.
+
+    Bank subfolders already in out_dir are emptied first, so no stale patch survives.
+    """
     for sub in ("mouth", "eyes", "expr", "warps"):
-        os.makedirs(os.path.join(out_dir, sub), exist_ok=True)
+        d = os.path.join(out_dir, sub)
+        if os.path.isdir(d):
+            for name in os.listdir(d):
+                if name.endswith((".png", ".npy")):
+                    os.remove(os.path.join(d, name))
+        os.makedirs(d, exist_ok=True)
     write_rgb(os.path.join(out_dir, "hub.png"), hub)
     cv2.imwrite(os.path.join(out_dir, "mask.png"), np.round(mask * 255).astype(np.uint8))
     manifest = {"size": SIZE, "hub": "hub.png", "mask": "mask.png",
@@ -447,6 +455,8 @@ def parse_box(text: str) -> Box:
         x, y, w, h = (int(v) for v in text.split(","))
     except ValueError:
         raise argparse.ArgumentTypeError("expected x,y,w,h")
+    if w != h or w <= 0:
+        raise argparse.ArgumentTypeError(f"the box must be square (w == h), got {w}x{h}")
     return (x, y, w, h)
 
 

@@ -43,7 +43,7 @@ def _raw_dir(root, hub, frames=None):
     frames = frames or {}
     root.mkdir(parents=True, exist_ok=True)
     names = ["hub"] + [f"lip_{i:02d}" for i in range(5)] + [f"eye_{i:02d}" for i in range(4)]
-    for name in names:
+    for name in names + [n for n in frames if n not in names]:
         _save(root / f"{name}.png", frames.get(name, hub))
     return root
 
@@ -104,3 +104,57 @@ def test_black_cavity(tmp_path):
     darkest = lum <= np.percentile(lum, 5)
     assert darkest.sum() > 0
     assert lum[darkest].max() == 0.0
+
+
+def test_build_bank_extra_shapes_and_expressions(tmp_path):
+    hub = _textured_face(504, seed=3)
+    smirk = hub.copy()
+    cv2.circle(smirk, (330, 330), 30, (250, 200, 120), -1)
+    raw = _raw_dir(tmp_path / "raw", hub, {"shape_E": hub, "expr_smirk": smirk})
+    out = tmp_path / "bank"
+    build_bank.build_bank(str(raw), str(out))
+
+    bank = load_bank(str(out))
+    assert "E_mild" in bank.mouth_patches
+    smirk_rgba = bank.expressions["smirk"]
+    assert smirk_rgba.shape == (SIZE, SIZE, 4)
+    assert smirk_rgba[165, 165, 3] > 0.9  # the changed spot is covered...
+    assert smirk_rgba[60, 126, 3] == 0.0  # ...the unchanged forehead is not
+
+
+def test_build_bank_lists_all_missing_frames(tmp_path):
+    raw = _raw_dir(tmp_path / "raw", _textured_face(504))
+    (raw / "lip_03.png").unlink()
+    (raw / "eye_01.png").unlink()
+    with pytest.raises(SystemExit) as e:
+        build_bank.build_bank(str(raw), str(tmp_path / "bank"))
+    assert "lip_03.png" in str(e.value) and "eye_01.png" in str(e.value)
+    assert not (tmp_path / "bank").exists()
+
+
+def test_align_warns_on_large_shift(capsys):
+    hub = _textured_face(504, seed=4)
+    build_bank.align(hub, _shift(hub, 30.0, 0.0), name="lip_02.png")
+    err = capsys.readouterr().err
+    assert "lip_02.png" in err and "px" in err
+
+
+def test_parse_box_rejects_non_square():
+    import argparse
+    assert stub_bank.parse_box("1,2,30,30") == (1, 2, 30, 30)
+    with pytest.raises(argparse.ArgumentTypeError):
+        stub_bank.parse_box("0,0,40,30")
+
+
+def test_write_bank_clears_stale_files(tmp_path):
+    src = tmp_path / "face.png"
+    _save(src, _textured_face(400))
+    out = tmp_path / "bank"
+    stub_bank.build_stub_bank(str(src), str(out))
+    stale = out / "mouth" / "G_mild.png"
+    stale.write_bytes((out / "mouth" / "A_mild.png").read_bytes())
+    (out / "expr").mkdir(exist_ok=True)
+    (out / "expr" / "old.png").write_bytes(b"x")
+    stub_bank.build_stub_bank(str(src), str(out))
+    assert not stale.exists() and not (out / "expr").exists()
+    load_bank(str(out))
