@@ -38,7 +38,9 @@ dev: mac-tools
 		echo "waiting for $$url ..."; \
 		for i in $$(seq 1 240); do \
 			curl -sf -o /dev/null $$url/health && break; \
-			kill -0 $$pids 2>/dev/null || { echo "a server died; see $(LOGS)/*.log"; exit 1; }; \
+			for p in $$pids; do \
+				kill -0 $$p 2>/dev/null || { echo "a server died; see $(LOGS)/*.log"; exit 1; }; \
+			done; \
 			sleep 0.5; \
 		done; \
 		curl -sf -o /dev/null $$url/health || { echo "$$url not ready; see $(LOGS)/*.log"; exit 1; }; \

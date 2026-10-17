@@ -18,7 +18,10 @@ dependencies = [
 
 [project.optional-dependencies]
 hw = ["sounddevice", "pyserial", "onnxruntime"]
-tts = ["piper-tts[alignment]>=1.8,<2", "phonikud", "phonikud-onnx", "transformers", "torch"]
+tts = ["piper-tts[alignment]>=1.8,<2", "phonikud", "phonikud-onnx", "huggingface_hub"]
+# The MMS Hebrew fallback voice only (tts.he_engine = "mms"). On the Orin, install
+# NVIDIA's JetPack torch wheel first: deploy/setup_orin.sh --with-mms.
+mms = ["transformers", "torch"]
 dev = ["pytest", "responses"]
 
 [project.scripts]

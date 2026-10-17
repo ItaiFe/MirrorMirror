@@ -1,0 +1,13 @@
+# The oracle's brain: llama.cpp server (Gemma 3 4B Q4_K_M, all layers on the GPU) on 127.0.0.1:8080.
+# A systemd *user* unit; deploy/setup_orin.sh installs it into ~/.config/systemd/user/.
+[Unit]
+Description=Mirror, Mirror: llama-server (Gemma 3 4B)
+StartLimitIntervalSec=0
+
+[Service]
+ExecStart=%h/mirror-bin/llama-server -m %h/mirror-models/gemma-3-4b-it-Q4_K_M.gguf -ngl 99 -c 4096 -np 2 --cache-reuse 256 --host 127.0.0.1 --port 8080
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=default.target

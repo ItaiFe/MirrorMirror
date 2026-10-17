@@ -1,0 +1,13 @@
+# Max clocks at every boot (a *system* unit; deploy/setup_orin.sh installs it into
+# /etc/systemd/system/). The nvpmodel power mode itself persists across reboots.
+[Unit]
+Description=Mirror, Mirror: jetson_clocks at boot
+After=nvpmodel.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/jetson_clocks
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

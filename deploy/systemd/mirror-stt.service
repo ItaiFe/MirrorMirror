@@ -1,0 +1,13 @@
+# Speech-to-text: whisper.cpp server (multilingual small, CUDA) on 127.0.0.1:8081.
+# A systemd *user* unit; deploy/setup_orin.sh installs it into ~/.config/systemd/user/.
+[Unit]
+Description=Mirror, Mirror: whisper-server (speech to text)
+StartLimitIntervalSec=0
+
+[Service]
+ExecStart=%h/mirror-bin/whisper-server -m %h/mirror-models/ggml-small.bin --host 127.0.0.1 --port 8081
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=default.target

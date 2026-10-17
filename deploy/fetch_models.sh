@@ -28,7 +28,8 @@ fetch() {  # fetch URL FILENAME
 fetch "$HF/ggerganov/whisper.cpp/resolve/main/ggml-small.bin" ggml-small.bin
 fetch "$HF/ggml-org/gemma-3-4b-it-GGUF/resolve/main/gemma-3-4b-it-Q4_K_M.gguf" \
     gemma-3-4b-it-Q4_K_M.gguf
-fetch "https://raw.githubusercontent.com/snakers4/silero-vad/master/src/silero_vad/data/silero_vad.onnx" \
+# Silero VAD pinned to the v5.1.2 tag (master moves).
+fetch "https://raw.githubusercontent.com/snakers4/silero-vad/v5.1.2/src/silero_vad/data/silero_vad.onnx" \
     silero_vad.onnx
 PIPER="$HF/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium"
 fetch "$PIPER/en_US-lessac-medium.onnx" en_US-lessac-medium.onnx

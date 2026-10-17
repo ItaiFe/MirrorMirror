@@ -1,0 +1,21 @@
+# Mic -> VAD -> whisper -> LLM -> TTS -> speaker, plus the frame lights and the face bus.
+# A systemd *user* unit; deploy/setup_orin.sh installs it into ~/.config/systemd/user/,
+# replacing @REPO@ with the repo checkout.
+[Unit]
+Description=Mirror, Mirror: voice loop
+Wants=mirror-stt.service mirror-llm.service
+After=mirror-stt.service mirror-llm.service
+StartLimitIntervalSec=0
+
+[Service]
+WorkingDirectory=@REPO@
+# Wait (up to 3 min) until both servers answer /health, so the first visitor isn't
+# talking to a model that is still loading.
+ExecStartPre=/bin/sh -c 'for i in $$(seq 180); do curl -sf -o /dev/null http://127.0.0.1:8081/health && curl -sf -o /dev/null http://127.0.0.1:8080/health && exit 0; sleep 1; done; exit 1'
+TimeoutStartSec=200
+ExecStart=@REPO@/.venv/bin/mirror-voice --config @REPO@/config/orin.toml
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=default.target

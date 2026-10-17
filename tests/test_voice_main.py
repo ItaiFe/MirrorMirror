@@ -57,3 +57,73 @@ def test_world_file_resolves_against_repo_root(tmp_path):
         tmp_path / "config" / "oracle_world.md")
     assert resolve_repo_path("/abs/world.md", str(cfg_path)) == "/abs/world.md"
     assert resolve_repo_path("config/w.md", None) == "config/w.md"
+
+
+class FakeLights:
+    def __init__(self, *args, fail=False):
+        self.states = []
+        self.fail = fail
+
+    def set_state(self, state):
+        self.states.append(state)
+        if self.fail:
+            raise OSError("serial gone")
+
+
+def _run_until_vad(monkeypatch, tmp_path, lights, vad_error):
+    """Run voice_main.run with every device stubbed; loading the VAD raises vad_error,
+    so run() goes straight to its shutdown path."""
+    import mirror.voice_main as vm
+    from mirror.config import Config
+
+    class Nothing:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def send(self, *args):
+            pass
+
+        def close(self):
+            pass
+
+    def no_vad(*args):
+        raise vad_error
+
+    monkeypatch.setattr(vm.signal, "signal", lambda *args: None)
+    monkeypatch.setenv("HF_HUB_OFFLINE", "1")
+    monkeypatch.setenv("HF_HOME", str(tmp_path))
+    monkeypatch.setattr(vm.FaceBus, "sender", classmethod(lambda cls, port: Nothing()))
+    monkeypatch.setattr(vm, "find_device", lambda *args: None)
+    monkeypatch.setattr(vm, "Player", Nothing)
+    monkeypatch.setattr(vm, "LogLights", lambda: lights)
+    monkeypatch.setattr(vm, "SileroVad", no_vad)
+    cfg = Config()
+    cfg.models_dir = str(tmp_path)
+    return vm.run(cfg)
+
+
+def test_shutdown_returns_lights_to_idle(monkeypatch, tmp_path):
+    from mirror.states import State
+    from mirror.voice_main import _Shutdown
+
+    lights = FakeLights()
+    assert _run_until_vad(monkeypatch, tmp_path, lights, _Shutdown()) == 0
+    assert lights.states == [State.IDLE, State.IDLE]  # startup push, then shutdown push
+
+
+def test_crash_still_returns_lights_to_idle(monkeypatch, tmp_path):
+    from mirror.states import State
+
+    lights = FakeLights()
+    with pytest.raises(RuntimeError, match="boom"):
+        _run_until_vad(monkeypatch, tmp_path, lights, RuntimeError("boom"))
+    assert lights.states[-1] == State.IDLE and len(lights.states) == 2
+
+
+def test_shutdown_lights_failure_is_not_fatal(monkeypatch, tmp_path, caplog):
+    from mirror.voice_main import _Shutdown
+
+    lights = FakeLights(fail=True)
+    with caplog.at_level("ERROR", logger="mirror.voice"):
+        assert _run_until_vad(monkeypatch, tmp_path, lights, _Shutdown()) == 0
+    assert len(lights.states) == 2 and "shutdown lights push failed" in caplog.text

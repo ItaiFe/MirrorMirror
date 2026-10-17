@@ -1,0 +1,24 @@
+# The face renderer: full-screen pygame window on the X display that feeds the LED panels.
+# A systemd *user* unit; deploy/setup_orin.sh installs it into ~/.config/systemd/user/,
+# replacing @REPO@ with the repo checkout. It needs the GDM autologin session's X server
+# (Xorg, not Wayland). Until that is up, xset fails and systemd retries every 2 s.
+[Unit]
+Description=Mirror, Mirror: face renderer
+After=graphical-session.target
+StartLimitIntervalSec=0
+
+[Service]
+Environment=DISPLAY=:0
+Environment=XAUTHORITY=%t/gdm/Xauthority
+WorkingDirectory=@REPO@
+# No screen saver, no blanking, no DPMS power-off.
+ExecStartPre=/usr/bin/xset s off -dpms
+# Lock the connected output (the MSD300) to 1920x1080. Best effort ("-"): if the
+# card doesn't offer that mode, the face still starts and pygame asks for it.
+ExecStartPre=-/bin/sh -c 'out=$$(xrandr | grep -m1 " connected" | cut -d" " -f1) && [ -n "$$out" ] && xrandr --output "$$out" --mode 1920x1080'
+ExecStart=@REPO@/.venv/bin/mirror-face --config @REPO@/config/orin.toml
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=default.target

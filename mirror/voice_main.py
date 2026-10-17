@@ -174,6 +174,14 @@ def _push_idle(lights, face) -> None:
             log.exception("startup idle push failed")
 
 
+def _lights_to_idle(lights) -> None:
+    """On the way out: leave the frame on the idle preset, not on "speaking"."""
+    try:
+        lights.set_state(State.IDLE)
+    except Exception:
+        log.exception("shutdown lights push failed")
+
+
 def build_hebrew_tts(tts_cfg: TtsConfig):
     """The Hebrew engine named by tts.he_engine."""
     from mirror import tts
@@ -289,6 +297,7 @@ def run(cfg: Config, wav_path=None, config_path=None) -> int:
         return 0
     finally:
         stop.set()
+        _lights_to_idle(raw_lights)
         face.close()
         with contextlib.suppress(Exception):
             output.close()
