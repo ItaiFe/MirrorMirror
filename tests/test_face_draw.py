@@ -62,12 +62,29 @@ def test_state_colour():
     assert _dist(dom, TEAL) < _dist(dom, PINK)
 
 
+def _bbox(surf):
+    xs, ys = [], []
+    for y in range(surf.get_height()):
+        for x in range(surf.get_width()):
+            if sum(surf.get_at((x, y))[:3]) > 60:
+                xs.append(x)
+                ys.append(y)
+    return min(xs), min(ys), max(xs), max(ys)
+
+
+def test_eye_corners_lit():
+    surf = _render(State.LISTENING)
+    for cx in (76, 176):
+        assert _lit(surf, (97, 104), (cx - 34, cx - 29)) > 0
+        assert _lit(surf, (97, 104), (cx + 29, cx + 34)) > 0
+
+
 def test_scales():
-    surf = _render(State.SPEAKING, mouth=0.6, size=756)
-    lit = sum(
-        1
-        for y in range(0, 756, 3)
-        for x in range(0, 756, 3)
-        if sum(surf.get_at((x, y))[:3]) > 60
-    )
-    assert lit / (252 * 252) > 0.01
+    small = _bbox(_render(State.SPEAKING, mouth=0.6))
+    big = _bbox(_render(State.SPEAKING, mouth=0.6, size=756))
+    for a, b in zip(small, big):
+        assert abs(b - 3 * a) <= 0.1 * 3 * 252 / 2 or a == 0
+    w_small, w_big = small[2] - small[0], big[2] - big[0]
+    h_small, h_big = small[3] - small[1], big[3] - big[1]
+    assert 2.7 <= w_big / w_small <= 3.3
+    assert 2.7 <= h_big / h_small <= 3.3

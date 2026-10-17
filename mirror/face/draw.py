@@ -41,7 +41,12 @@ def _curve(xs, f):
 
 
 def _line(surf, colour, pts, s):
-    pygame.draw.lines(surf, colour, False, [(x * s, y * s) for x, y in pts], max(3, round(LINE_W * s)))
+    w = max(3, round(LINE_W * s))
+    scaled = [(x * s, y * s) for x, y in pts]
+    pygame.draw.lines(surf, colour, False, scaled, w)
+    # round joins and caps: pygame draws each segment as an independent quad
+    for p in scaled:
+        pygame.draw.circle(surf, colour, p, w / 2)
 
 
 def _draw_eye(surf, colour, cx, cy, openness, iris_dx, iris_dy, s):
