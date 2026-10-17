@@ -1,0 +1,52 @@
+{
+ "size": 252,
+ "hub": "hub.png",
+ "mask": "mask.png",
+ "mouth": {
+  "box": [
+   90,
+   155,
+   71,
+   39
+  ],
+  "patches": {
+   "A_mild": "mouth/A_mild.png",
+   "A_wide": "mouth/A_wide.png",
+   "B_mild": "mouth/B_mild.png",
+   "B_wide": "mouth/B_wide.png",
+   "C_mild": "mouth/C_mild.png",
+   "C_wide": "mouth/C_wide.png",
+   "D_mild": "mouth/D_mild.png",
+   "D_wide": "mouth/D_wide.png",
+   "E_mild": "mouth/E_mild.png",
+   "F_mild": "mouth/F_mild.png"
+  }
+ },
+ "eyes": {
+  "box_left": [
+   70,
+   84,
+   40,
+   24
+  ],
+  "box_right": [
+   139,
+   84,
+   40,
+   24
+  ],
+  "patches": {
+   "closed": "eyes/closed.png",
+   "half": "eyes/half.png",
+   "look_up": "eyes/look_up.png",
+   "open": "eyes/open.png"
+  }
+ },
+ "warps": {
+  "breathe": "warps/breathe.npy",
+  "brows": "warps/brows.npy",
+  "gaze_x": "warps/gaze_x.npy",
+  "gaze_y": "warps/gaze_y.npy",
+  "jaw": "warps/jaw.npy"
+ }
+}

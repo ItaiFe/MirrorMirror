@@ -9,6 +9,7 @@ description = "Mirror, Mirror: a talking LED mirror"
 requires-python = ">=3.10"
 dependencies = [
     "numpy",
+    "opencv-python-headless",
     "pillow",
     "pygame",
     "requests",
