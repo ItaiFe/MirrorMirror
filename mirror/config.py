@@ -54,6 +54,9 @@ class ConversationConfig:
     followup_s: float = 6.0
     max_reply_sentences: int = 3
     max_reply_chars: int = 300
+    filler_enabled: bool = True     # speak a short filler line while the LLM thinks
+    filler_min_wait_s: float = 0.0  # ...only if no sentence is ready this soon (0: always)
+    world_file: str = "config/oracle_world.md"  # the oracle's background; relative to the repo
 
 
 @dataclass

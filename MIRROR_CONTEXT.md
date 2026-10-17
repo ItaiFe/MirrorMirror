@@ -60,8 +60,10 @@ language. Fully offline. Placed away from loud areas.
 - Hebrew and English, auto-detected. Reply in the visitor's language.
   Fallback if Hebrew output is too weak: understand Hebrew, reply in
   English.
-- Persona: a magic mirror. Playful, a little vain, never cruel to the
-  person in front of it. Replies of one to three sentences.
+- Persona: the oracle in the mirror at Midburn. Answers mysteriously and
+  playfully, in riddles, omens and half-prophecies, with a wink and warmth;
+  never cruel or frightening, never predicts death, illness or harm.
+  Replies of one to three sentences.
 
 ## Still to check (hardware labels, no decisions)
 - Speaker impedance (4 or 8 ohm; never 70/100 V line mode)

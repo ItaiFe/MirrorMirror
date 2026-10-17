@@ -36,3 +36,6 @@ listen_timeout_s = 8.0
 followup_s = 6.0
 max_reply_sentences = 3
 max_reply_chars = 300
+filler_enabled = true      # a short pre-synthesized line while the LLM thinks
+filler_min_wait_s = 0.0    # skip the filler if a sentence is ready within this (0: always play)
+world_file = "config/oracle_world.md"   # oracle background; relative to the repo root

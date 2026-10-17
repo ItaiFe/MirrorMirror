@@ -1,3 +1,6 @@
+import re
+import threading
+
 import numpy as np
 from mirror.config import ConversationConfig
 from mirror.conversation import Controller
@@ -35,6 +38,9 @@ class FakeLLM:
             raise item
         return item
 
+    def reply_stream(self, history, user_text, lang, cancel=None):
+        yield from re.split(r"(?<=[.!?…])\s+", self.reply(history, user_text, lang))
+
 
 class FakeTTS:
     def __init__(self, track=None):
@@ -51,9 +57,11 @@ class FakePlayer:
         self.levels = levels
         self.during = during  # callable run mid-playback
         self.plays = 0
+        self.played = []  # the samples of each play, in order
 
     def play(self, samples, sr, on_level):
         self.plays += 1
+        self.played.append(samples)
         for lvl in self.levels:
             on_level(lvl)
             if self.during is not None:
@@ -84,11 +92,13 @@ class Clock:
         return self.t
 
 
-def make(script, llm=None, player=None, tts=None, face=None):
+def make(script, llm=None, player=None, tts=None, face=None, fillers=None, cfg=None,
+         first_sentence_timeout_s=20.0):
     parts = dict(stt=FakeSTT(script), llm=llm or FakeLLM(), tts=tts or FakeTTS(),
                  player=player or FakePlayer(), lights=FakeLights(), face=face or FakeFace())
     clock = Clock()
-    ctl = Controller(cfg=ConversationConfig(), clock=clock, **parts)
+    ctl = Controller(cfg=cfg or ConversationConfig(), clock=clock, fillers=fillers,
+                     first_sentence_timeout_s=first_sentence_timeout_s, **parts)
     return ctl, parts, clock
 
 
@@ -314,3 +324,223 @@ def test_hop_count_restarts_for_each_reply():
     ctl.on_segment(SEG)
     shapes = [m[2] for m in p["face"].msgs if m[0] == State.SPEAKING and m[1] == 0.5]
     assert shapes == ["D", "D", "D", "X"] * 2
+
+
+# --- fillers and streamed replies ---------------------------------------------
+
+FILLER_CLIP = np.full(441, 0.25, dtype=np.float32)
+
+
+class FakeFillers:
+    def __init__(self, track=None):
+        self.track = track
+        self.picks = []
+
+    def pick(self, lang):
+        self.picks.append(lang)
+        return FILLER_CLIP, 22050, self.track
+
+
+class TextTTS(FakeTTS):
+    """Synthesizes each text to a clip that carries the text, so plays can be identified."""
+
+    def synth_visemes(self, text, lang):
+        self.calls.append((text, lang))
+        return TextClip(text), 22050, self.track
+
+
+class TextClip(np.ndarray):
+    def __new__(cls, text):
+        obj = np.zeros(2205, dtype=np.float32).view(cls)
+        obj.text = text
+        return obj
+
+    def __array_finalize__(self, obj):
+        self.text = getattr(obj, "text", None)
+
+
+def played_texts(player):
+    return [getattr(s, "text", None) if s is not FILLER_CLIP else "FILLER"
+            for s in player.played]
+
+
+class ScriptedLLM:
+    """reply_stream yields the given sentences; an Exception item is raised."""
+
+    def __init__(self, items, before=None):
+        self.items = items
+        self.before = before or {}  # index -> callable run before yielding that item
+        self.calls = []
+        self.finished = threading.Event()
+
+    def reply_stream(self, history, user_text, lang, cancel=None):
+        self.calls.append((list(history), user_text, lang))
+        try:
+            for i, item in enumerate(self.items):
+                if i in self.before:
+                    self.before[i]()
+                if isinstance(item, Exception):
+                    raise item
+                yield item
+        finally:
+            self.finished.set()
+
+
+def test_filler_plays_before_reply():
+    llm = ScriptedLLM(["Stars align.", "You will dance."])
+    ctl, p, _ = make([Transcript("mirror mirror what will happen", "en")], llm=llm,
+                     tts=TextTTS(), fillers=FakeFillers())
+    ctl.on_segment(SEG)
+    assert played_texts(p["player"]) == ["FILLER", "Stars align.", "You will dance."]
+    states = p["lights"].states
+    assert states[:2] == [State.THINKING, State.SPEAKING]
+    assert states[-1] == State.LISTENING
+    assert State.IDLE not in states
+    assert p["tts"].calls == [("Stars align.", "en"), ("You will dance.", "en")]
+
+
+def test_filler_visemes_forwarded():
+    track = VisemeTrack(np.array([0.0]), ["D"])
+    ctl, p, _ = make([Transcript("mirror mirror who", "en")], llm=ScriptedLLM(["Hm."]),
+                     fillers=FakeFillers(track=track), player=FakePlayer(levels=(0.4,)))
+    ctl.on_segment(SEG)
+    assert speaking_msgs(p["face"])[0] == (State.SPEAKING, 0.4, "D")
+
+
+def test_filler_disabled_skips():
+    fillers = FakeFillers()
+    ctl, p, _ = make([Transcript("mirror mirror who", "en")], llm=ScriptedLLM(["Yes."]),
+                     tts=TextTTS(), fillers=fillers,
+                     cfg=ConversationConfig(filler_enabled=False))
+    ctl.on_segment(SEG)
+    assert played_texts(p["player"]) == ["Yes."]
+    assert fillers.picks == []
+    assert p["lights"].states == [State.THINKING, State.SPEAKING, State.LISTENING]
+
+
+def test_filler_skipped_when_sentence_arrives_within_min_wait():
+    ctl, p, _ = make([Transcript("mirror mirror who", "en")], llm=ScriptedLLM(["Yes."]),
+                     tts=TextTTS(), fillers=FakeFillers(),
+                     cfg=ConversationConfig(filler_min_wait_s=5.0))
+    ctl.on_segment(SEG)
+    assert played_texts(p["player"]) == ["Yes."]
+
+
+def test_back_to_thinking_after_filler_while_waiting():
+    gate = threading.Event()
+    llm = ScriptedLLM(["Late answer."], before={0: lambda: gate.wait(2.0)})
+    player = FakePlayer(levels=(0.1,))
+    orig = player.play
+
+    def play(samples, sr, on_level):
+        orig(samples, sr, on_level)
+        gate.set()  # the filler is over; now let the LLM answer
+
+    player.play = play
+    ctl, p, _ = make([Transcript("mirror mirror who", "en")], llm=llm, tts=TextTTS(),
+                     fillers=FakeFillers(), player=player)
+    ctl.on_segment(SEG)
+    assert p["lights"].states == [State.THINKING, State.SPEAKING, State.THINKING,
+                                  State.SPEAKING, State.LISTENING]
+    assert played_texts(p["player"]) == ["FILLER", "Late answer."]
+
+
+def test_first_sentence_synth_while_second_generates():
+    first_played = threading.Event()
+    seen = {}
+
+    def before_second():
+        seen["first_played"] = first_played.wait(2.0)
+
+    llm = ScriptedLLM(["One.", "Two."], before={1: before_second})
+    player = FakePlayer()
+    orig = player.play
+
+    def play(samples, sr, on_level):
+        orig(samples, sr, on_level)
+        if getattr(samples, "text", None) == "One.":
+            first_played.set()
+
+    player.play = play
+    ctl, p, _ = make([Transcript("mirror mirror who", "en")], llm=llm, tts=TextTTS(),
+                     player=player)
+    ctl.on_segment(SEG)
+    assert seen["first_played"] is True  # sentence 1 was heard before sentence 2 existed
+    assert played_texts(p["player"]) == ["One.", "Two."]
+
+
+def test_stream_failure_before_first_sentence_uses_fallback():
+    ctl, p, _ = make([Transcript("mirror mirror who", "en")],
+                     llm=ScriptedLLM([LLMError("down")]), tts=TextTTS(), fillers=FakeFillers())
+    ctl.on_segment(SEG)
+    assert played_texts(p["player"]) == ["FILLER", FALLBACK["en"]]
+    assert ctl.state == State.IDLE
+    assert p["lights"].states[-1] == State.IDLE
+
+
+def test_first_sentence_timeout_uses_fallback():
+    release = threading.Event()
+    llm = ScriptedLLM(["Too late."], before={0: lambda: release.wait(5.0)})
+    tts = TextTTS()
+    player = FakePlayer()
+    orig = player.play
+
+    def play(samples, sr, on_level):
+        orig(samples, sr, on_level)
+        if getattr(samples, "text", None) == FALLBACK["en"]:
+            release.set()
+
+    player.play = play
+    ctl, p, _ = make([Transcript("mirror mirror who", "en")], llm=llm, tts=tts,
+                     player=player, first_sentence_timeout_s=0.2)
+    ctl.on_segment(SEG)
+    assert played_texts(p["player"]) == [FALLBACK["en"]]
+    assert ctl.state == State.IDLE
+    assert llm.finished.is_set()  # the stream worker was stopped before on_segment returned
+    assert "Too late." not in [t for t, _ in tts.calls]
+
+
+def test_history_gets_joined_reply():
+    ctl, p, _ = make([Transcript("mirror mirror who", "en"), Transcript("and then?", "en")],
+                     llm=ScriptedLLM(["Stars align.", "You will dance."]))
+    ctl.on_segment(SEG)
+    ctl.on_segment(SEG)
+    assert p["llm"].calls[1][0] == [{"role": "user", "content": "who"},
+                                    {"role": "assistant",
+                                     "content": "Stars align. You will dance."}]
+
+
+def test_workers_stopped_when_playback_interrupted():
+    class Interrupt(BaseException):
+        pass
+
+    llm = ScriptedLLM(["One.", "Two.", "Three."])
+    player = FakePlayer()
+
+    def play(samples, sr, on_level):
+        raise Interrupt()
+
+    player.play = play
+    ctl, p, _ = make([Transcript("mirror mirror who", "en")], llm=llm, tts=TextTTS(),
+                     player=player)
+    before = set(threading.enumerate())
+    try:
+        ctl.on_segment(SEG)
+    except Interrupt:
+        pass
+    else:
+        raise AssertionError("BaseException should propagate")
+    assert set(threading.enumerate()) - before == set()  # no worker left running
+    assert llm.finished.is_set()
+
+
+def test_segments_during_filler_dropped():
+    holder = {}
+    player = FakePlayer(during=lambda: holder["ctl"].on_segment(SEG))
+    ctl, p, _ = make([Transcript("mirror mirror who", "en")], llm=ScriptedLLM(["Yes."]),
+                     player=player, fillers=FakeFillers())
+    holder["ctl"] = ctl
+    ctl.on_segment(SEG)
+    assert p["stt"].calls == 1
+    assert p["player"].plays == 2
+    assert ctl.state == State.LISTENING

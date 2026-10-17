@@ -2,7 +2,7 @@ import pytest
 
 import mirror.tts
 from mirror.config import TtsConfig
-from mirror.voice_main import build_hebrew_tts, open_output
+from mirror.voice_main import build_hebrew_tts, open_output, resolve_repo_path
 
 
 class Recorder:
@@ -49,3 +49,11 @@ def test_open_output_opens_at_rate():
     out = Speaker()
     open_output(out, 22050)
     assert out.rate == 22050
+
+
+def test_world_file_resolves_against_repo_root(tmp_path):
+    cfg_path = tmp_path / "config" / "orin.toml"
+    assert resolve_repo_path("config/oracle_world.md", str(cfg_path)) == str(
+        tmp_path / "config" / "oracle_world.md")
+    assert resolve_repo_path("/abs/world.md", str(cfg_path)) == "/abs/world.md"
+    assert resolve_repo_path("config/w.md", None) == "config/w.md"

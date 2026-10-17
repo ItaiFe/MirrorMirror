@@ -23,8 +23,10 @@ from mirror.audio import CHUNK, Mic, Player, find_device
 from mirror.bus import FaceBus
 from mirror.config import Config, TtsConfig, load_config
 from mirror.conversation import Controller
+from mirror.fillers import FillerBank
 from mirror.lights import LogLights, WledSerial
 from mirror.llm import LlamaServerLLM
+from mirror.persona import FILLERS, load_world
 from mirror.states import State
 from mirror.stt import WhisperServerSTT
 from mirror.vad import Segmenter, SileroVad
@@ -58,17 +60,27 @@ class AnswerGate:
 
 
 class LatencyPlayer:
-    """Player wrapper that logs end-of-speech -> first-audio once per utterance."""
+    """Player wrapper that logs end-of-speech -> start of each clip of an answer
+    (the filler, then each reply sentence)."""
 
     def __init__(self, player):
         self._player = player
-        self.speech_end = None  # time.monotonic() of the end of the user's speech
+        self._speech_end = None  # time.monotonic() of the end of the user's speech
+        self._clip = 0
+
+    @property
+    def speech_end(self):
+        return self._speech_end
+
+    @speech_end.setter
+    def speech_end(self, t) -> None:
+        self._speech_end, self._clip = t, 0
 
     def play(self, samples, sr, on_level) -> None:
-        if self.speech_end is not None:
-            log.info("latency: end of speech -> first audio %.2f s",
-                     time.monotonic() - self.speech_end)
-            self.speech_end = None
+        if self._speech_end is not None:
+            self._clip += 1
+            log.info("latency: end of speech -> audio clip %d %.2f s", self._clip,
+                     time.monotonic() - self._speech_end)
         self._player.play(samples, sr, on_level)
 
 
@@ -174,7 +186,16 @@ def build_hebrew_tts(tts_cfg: TtsConfig):
     raise ValueError(f"unknown tts.he_engine {tts_cfg.he_engine!r} (phonikud | mms)")
 
 
-def run(cfg: Config, wav_path=None) -> int:
+def resolve_repo_path(path: str, config_path) -> str:
+    """A relative path from the config, resolved against the repo root (the parent
+    of the config file's directory); against the working directory without one."""
+    if os.path.isabs(path) or config_path is None:
+        return path
+    repo = os.path.dirname(os.path.dirname(os.path.abspath(config_path)))
+    return os.path.join(repo, path)
+
+
+def run(cfg: Config, wav_path=None, config_path=None) -> int:
     models_dir = os.path.abspath(cfg.models_dir)
     # MMS (transformers) and Phonikud's tokenizer load through the Hugging Face hub;
     # they must come from the local cache, offline.
@@ -202,16 +223,23 @@ def run(cfg: Config, wav_path=None) -> int:
         vad = SileroVad(os.path.join(models_dir, "silero_vad.onnx"))
         segmenter = Segmenter(vad, frame_samples=CHUNK, sample_rate=cfg.audio.sample_rate)
         stt = WhisperServerSTT(cfg.servers.stt_url, cfg.servers.timeout_s)
+        world = load_world(resolve_repo_path(cfg.conversation.world_file, config_path))
         llm = LlamaServerLLM(cfg.servers.llm_url, cfg.servers.timeout_s,
                              cfg.conversation.max_reply_sentences,
-                             cfg.conversation.max_reply_chars)
+                             cfg.conversation.max_reply_chars, world=world)
         log.info("loading TTS voices (Hebrew: %s)", cfg.tts.he_engine)
         en_tts = PiperTTS(cfg.tts.piper_voice_en)
         tts = TTSRouter(en_tts, build_hebrew_tts(cfg.tts))
         tts.warmup()
+        fillers = FillerBank(tts, FILLERS)
+        t0 = time.monotonic()
+        fillers.prepare()
+        log.info("filler lines ready in %.1f s", time.monotonic() - t0)
         open_output(output, en_tts.sample_rate)
         player = LatencyPlayer(output)
-        controller = Controller(stt, llm, tts, player, gate, face, cfg.conversation)
+        controller = Controller(stt, llm, tts, player, gate, face, cfg.conversation,
+                                fillers=fillers,
+                                first_sentence_timeout_s=cfg.servers.timeout_s)
 
         if wav_path:
             source = WavSource(wav_path, cfg.audio.sample_rate)
@@ -273,7 +301,7 @@ def main() -> None:
                                   "then exit once the reply has been spoken")
     args = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
-    raise SystemExit(run(load_config(args.config), args.wav))
+    raise SystemExit(run(load_config(args.config), args.wav, args.config))
 
 
 if __name__ == "__main__":
