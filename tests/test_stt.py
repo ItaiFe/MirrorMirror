@@ -81,3 +81,19 @@ def test_wav_payload_and_form_fields():
         pcm = np.frombuffer(w.readframes(w.getnframes()), dtype="<i2")
     assert pcm[3] == 32767 and pcm[4] == -32767  # clipped
     assert abs(int(pcm[1]) - 16383) <= 1
+
+
+FIXTURES = __import__("pathlib").Path(__file__).parent / "fixtures"
+
+
+@pytest.mark.parametrize("name, text, lang", [
+    ("whisper_verbose_en.json", "Mirror, mirror on the wall, who is the fairest of them all?", "en"),
+    ("whisper_verbose_he.json", "מה אמר אש על הקיר מי הכי יפה?", "he"),
+])
+@responses.activate
+def test_real_whisper_server_response(name, text, lang):
+    # Trimmed copies of real whisper-server (whisper.cpp 1.9.5) verbose_json replies:
+    # the language field carries the full name ("hebrew"), not the ISO code.
+    body = (FIXTURES / name).read_text(encoding="utf-8")
+    responses.post(URL + "/inference", body=body, content_type="application/json")
+    assert make().transcribe(SAMPLES) == Transcript(text, lang)

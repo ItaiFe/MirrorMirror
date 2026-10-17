@@ -1,0 +1,48 @@
+{
+ "task": "transcribe",
+ "language": "hebrew",
+ "duration": 4.368000030517578,
+ "text": " מה אמר אש על הקיר מי הכי יפה?\n",
+ "segments": [
+  {
+   "id": 0,
+   "text": " מה אמר אש על הקיר מי הכי יפה?",
+   "start": 0.0,
+   "end": 4.0,
+   "tokens": [
+    16929,
+    4142,
+    18520,
+    4142
+   ],
+   "words": [
+    {
+     "word": " מה",
+     "start": 0.3,
+     "end": 0.3,
+     "t_dtw": -1,
+     "probability": 0.49689188599586487
+    },
+    {
+     "word": " אמר",
+     "start": 0.39,
+     "end": 0.9,
+     "t_dtw": -1,
+     "probability": 0.15707635879516602
+    }
+   ],
+   "temperature": 0.0,
+   "avg_logprob": -0.39723262190818787,
+   "no_speech_prob": 0.021821124479174614
+  }
+ ],
+ "detected_language": "hebrew",
+ "detected_language_probability": 0.9815860390663147,
+ "language_probabilities": {
+  "en": 0.008329618722200394,
+  "de": 0.0015880869468674064,
+  "ar": 0.0018224219093099236,
+  "he": 0.9815860390663147,
+  "yi": 0.001727736322209239
+ }
+}

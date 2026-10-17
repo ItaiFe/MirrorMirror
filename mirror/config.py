@@ -1,4 +1,4 @@
-from dataclasses import dataclass, field, fields
+from dataclasses import MISSING, dataclass, field, fields
 from typing import Optional
 
 try:
@@ -60,6 +60,7 @@ class Config:
     face: FaceConfig = field(default_factory=FaceConfig)
     lights: LightsConfig = field(default_factory=LightsConfig)
     conversation: ConversationConfig = field(default_factory=ConversationConfig)
+    models_dir: str = "models"  # silero_vad.onnx and the Hugging Face cache (hf/)
 
 
 def load_config(path: str) -> Config:
@@ -67,6 +68,9 @@ def load_config(path: str) -> Config:
         raw = tomllib.load(f)
     kwargs = {}
     for fld in fields(Config):
-        section = raw.get(fld.name, {})
-        kwargs[fld.name] = fld.default_factory(**section)
+        if fld.default_factory is MISSING:  # top-level scalar
+            if fld.name in raw:
+                kwargs[fld.name] = raw[fld.name]
+            continue
+        kwargs[fld.name] = fld.default_factory(**raw.get(fld.name, {}))
     return Config(**kwargs)

@@ -1,0 +1,47 @@
+{
+ "task": "transcribe",
+ "language": "english",
+ "duration": 3.2160000801086426,
+ "text": " Mirror, mirror on the wall, who is the fairest of them all?\n",
+ "segments": [
+  {
+   "id": 0,
+   "text": " Mirror, mirror on the wall, who is the fairest of them all?",
+   "start": 0.0,
+   "end": 3.2,
+   "tokens": [
+    34452,
+    11,
+    8013,
+    322
+   ],
+   "words": [
+    {
+     "word": " Mirror",
+     "start": 0.06,
+     "end": 0.44,
+     "t_dtw": -1,
+     "probability": 0.8322881460189819
+    },
+    {
+     "word": ",",
+     "start": 0.44,
+     "end": 0.58,
+     "t_dtw": -1,
+     "probability": 0.8160516619682312
+    }
+   ],
+   "temperature": 0.0,
+   "avg_logprob": -0.09695588052272797,
+   "no_speech_prob": 0.0190658587962389
+  }
+ ],
+ "detected_language": "english",
+ "detected_language_probability": 0.9849735498428345,
+ "language_probabilities": {
+  "en": 0.9849735498428345,
+  "zh": 0.0011490632314234972,
+  "la": 0.0012738659279420972,
+  "cy": 0.006309321150183678
+ }
+}

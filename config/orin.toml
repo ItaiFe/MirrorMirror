@@ -1,4 +1,6 @@
 # Deployment config for the Jetson Orin Nano.
+models_dir = "/home/mirror/mirror-models"   # silero_vad.onnx + Hugging Face cache (hf/)
+
 [audio]
 input_device = "XVF3800"    # substring match on device name
 output_device = "XVF3800"

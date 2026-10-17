@@ -1,4 +1,6 @@
 # Development config for macOS: windowed face, system default audio, log-only lights.
+models_dir = "models"   # silero_vad.onnx + Hugging Face cache (hf/)
+
 [audio]
 sample_rate = 16000
 

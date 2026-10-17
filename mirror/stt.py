@@ -6,10 +6,12 @@ from dataclasses import dataclass
 import numpy as np
 import requests
 
-# Name of the detected-language field in the verbose_json response.
-# To be pinned against a real whisper-server in Task 11.
+# Detected-language field of the verbose_json response, pinned against a real
+# whisper-server (whisper.cpp 1.9.5). Its value is the full language name
+# ("hebrew", "english"), not the ISO code; both forms are accepted.
 LANGUAGE_FIELD = "language"
 _LANGUAGE_FALLBACK_FIELD = "detected_language"
+_HEBREW = {"he", "hebrew", "iw"}
 
 
 class STTError(Exception):
@@ -57,4 +59,5 @@ class WhisperServerSTT:
         except (ValueError, KeyError, TypeError) as e:  # bad JSON / missing text
             raise STTError(f"malformed whisper-server response: {e}") from e
         lang = payload.get(LANGUAGE_FIELD) or payload.get(_LANGUAGE_FALLBACK_FIELD)
-        return Transcript(str(text).strip(), "he" if lang == "he" else "en")
+        is_hebrew = str(lang).strip().lower() in _HEBREW
+        return Transcript(str(text).strip(), "he" if is_hebrew else "en")
