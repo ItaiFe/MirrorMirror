@@ -2,7 +2,7 @@ import pytest
 
 import mirror.tts
 from mirror.config import TtsConfig
-from mirror.voice_main import build_hebrew_tts
+from mirror.voice_main import build_hebrew_tts, open_output
 
 
 class Recorder:
@@ -27,3 +27,25 @@ def test_build_hebrew_tts_mms(monkeypatch):
 def test_build_hebrew_tts_unknown_engine():
     with pytest.raises(ValueError, match="he_engine"):
         build_hebrew_tts(TtsConfig(he_engine="espeak"))
+
+
+def test_open_output_failure_is_not_fatal(caplog):
+    class NoSpeaker:
+        def open(self, sr):
+            raise OSError("no such device")
+
+    with caplog.at_level("WARNING", logger="mirror.voice"):
+        open_output(NoSpeaker(), 22050)  # must not raise
+    assert "no such device" in caplog.text
+
+
+def test_open_output_opens_at_rate():
+    class Speaker:
+        rate = None
+
+        def open(self, sr):
+            self.rate = sr
+
+    out = Speaker()
+    open_output(out, 22050)
+    assert out.rate == 22050

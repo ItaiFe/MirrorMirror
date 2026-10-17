@@ -53,6 +53,33 @@ def test_short_unprotected_still_absorbed_after_protected():
     assert track.shapes == ["D", "H", "E"]
 
 
+def test_protected_cluster_never_shrinks_a_protected_donor():
+    # f-u-l then a short t: G and H can borrow legally, F has no legal donor
+    al = [("a", 3000), ("f", 500), ("u", 500), ("l", 500), ("t", 300)]
+    track = track_from_alignments(al, sr=SR, total_samples=4800)
+    assert track.shapes == ["D", "G", "F", "H"]
+    d = durations(track)
+    assert d[1] == pytest.approx(FRAME_S)       # G took its time from the "a"
+    assert d[2] == pytest.approx(500 / SR)      # F kept as it was, not shrunk
+    assert d[3] >= FRAME_S - 1e-9               # H took the "t" (then absorbed it)
+    assert track.end == pytest.approx(4800 / SR)
+
+
+def test_protected_pair_at_track_end_keeps_both():
+    # A then G at the end: G has no next segment and A is at its minimum
+    track = track_from_alignments([("a", 3000), ("m", 300), ("f", 300)],
+                                  sr=SR, total_samples=3600)
+    assert track.shapes == ["D", "A", "G"]
+    d = durations(track)
+    assert d[1] == pytest.approx(FRAME_S)
+    assert d[2] == pytest.approx(300 / SR)  # no legal donor: kept as-is
+
+
+def test_protected_without_any_legal_donor_kept_as_is():
+    track = track_from_alignments([("m", 300)], sr=SR, total_samples=300)
+    assert track.shapes == ["A"] and track.end == pytest.approx(300 / SR)
+
+
 def test_insert_b_between_a_and_d():
     track = track_from_alignments([("m", 3000), ("a", 3000)], sr=SR, total_samples=6000)
     assert track.shapes == ["A", "B", "D"]

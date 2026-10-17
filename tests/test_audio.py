@@ -1,5 +1,6 @@
 import math
 import sys
+import threading
 import types
 
 import numpy as np
@@ -91,7 +92,7 @@ def test_player_reuses_stream_until_rate_changes(monkeypatch):
     player.play(x, 22050, lambda _: None)
     assert len(FakeOutputStream.opened) == 1
     first = FakeOutputStream.opened[0]
-    assert first.events == ["start"] and len(first.writes) == 2
+    assert first.events == ["start"] and sum(len(w) for w in first.writes) == 2 * 2205
     player.play(np.zeros(1600, dtype=np.float32), 16000, lambda _: None)
     assert [s.samplerate for s in FakeOutputStream.opened] == [22050, 16000]
     assert first.events == ["start", "stop", "close"]
@@ -115,6 +116,66 @@ def test_player_write_error_raises_and_reopens(monkeypatch):
     monkeypatch.setattr(FakeOutputStream, "write", good_write)
     player.play(np.zeros(320, dtype=np.float32), 16000, lambda _: None)
     assert len(FakeOutputStream.opened) == 2  # a fresh stream after the failure
+
+
+class BlockingOutputStream(FakeOutputStream):
+    """write() blocks like a real device: each block takes real time to drain."""
+
+    def write(self, data):
+        self.events.append("write")
+        threading.Event().wait(0.01)
+
+    def abort(self):
+        self.events.append("abort")
+
+
+class Stop(BaseException):
+    pass
+
+
+def test_player_interrupted_mid_play_aborts_and_joins_writer(monkeypatch):
+    sd = _fake_sd()
+    sd.OutputStream = BlockingOutputStream
+    monkeypatch.setitem(sys.modules, "sounddevice", sd)
+    _fake_clock(monkeypatch)
+    calls = []
+
+    def on_level(level):
+        calls.append(level)
+        if len(calls) == 3:
+            raise Stop()
+
+    player = audio.Player(None)
+    with pytest.raises(Stop):
+        player.play(np.zeros(16000, dtype=np.float32), 16000, on_level)
+    (stream,) = FakeOutputStream.opened
+    # the writer stopped early (1 s = 20 blocks) and the stream was only aborted
+    # and closed after it had exited
+    assert stream.events[-2:] == ["abort", "close"]
+    assert stream.events.count("write") < 20
+    player.close()  # already discarded: a no-op
+    assert stream.events.count("close") == 1
+
+
+def test_player_stops_animating_on_write_error(monkeypatch):
+    monkeypatch.setitem(sys.modules, "sounddevice", _fake_sd())
+    _fake_clock(monkeypatch)
+    failed = threading.Event()
+
+    def broken_write(self, data):
+        failed.set()
+        raise OSError("device gone")
+
+    monkeypatch.setattr(FakeOutputStream, "write", broken_write)
+    levels = []
+
+    def on_level(level):
+        levels.append(level)
+        failed.wait(5)  # make sure the writer has failed before the next hop
+
+    with pytest.raises(OSError):
+        audio.Player(None).play(np.zeros(16000, dtype=np.float32), 16000, on_level)
+    assert len(levels) <= 2  # stopped early instead of animating 1 s of silence
 
 
 def test_find_device_matches_direction_case_insensitively(monkeypatch):

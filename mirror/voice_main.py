@@ -119,6 +119,15 @@ class WavSource:
         return chunk
 
 
+def open_output(output, sr: int) -> None:
+    """Open the speaker now: the first open of a cold output device can take seconds.
+    A failure (missing or busy speaker) is not fatal; the first reply retries it."""
+    try:
+        output.open(sr)
+    except Exception as e:
+        log.warning("could not open the audio output yet: %s", e)
+
+
 def audio_loop(source, segmenter: Segmenter, vad: SileroVad, gate: AnswerGate,
                segments: "queue.Queue", stop: threading.Event) -> None:
     deaf = False
@@ -200,8 +209,7 @@ def run(cfg: Config, wav_path=None) -> int:
         en_tts = PiperTTS(cfg.tts.piper_voice_en)
         tts = TTSRouter(en_tts, build_hebrew_tts(cfg.tts))
         tts.warmup()
-        # Open the speaker now: the first open of a cold output device can take seconds.
-        output.open(en_tts.sample_rate)
+        open_output(output, en_tts.sample_rate)
         player = LatencyPlayer(output)
         controller = Controller(stt, llm, tts, player, gate, face, cfg.conversation)
 

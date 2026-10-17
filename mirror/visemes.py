@@ -87,6 +87,11 @@ def _shape_segments(alignments: list[tuple[str, int]]) -> list[list]:
     return segs
 
 
+def _can_give(seg: list, need: float) -> bool:
+    left = seg[1] - need
+    return left >= FRAME_S if seg[0] in PROTECTED else left > 0
+
+
 def track_from_alignments(alignments: list[tuple[str, int]], sr: int,
                           total_samples: int) -> VisemeTrack:
     """Build a viseme track from per-phoneme sample counts.
@@ -112,13 +117,15 @@ def track_from_alignments(alignments: list[tuple[str, int]], sr: int,
             raw.append([shape, n * scale])
 
     # Protected shapes last at least one frame, borrowing from the next segment
-    # (or the previous one when the next can't spare it).
+    # (or the previous one when the next can't spare it). A donor must stay legal:
+    # a protected one keeps at least a frame, an unprotected one stays above 0.
+    # With no legal donor the segment is kept as it is.
     for i, seg in enumerate(raw):
         need = FRAME_S - seg[1]
         if seg[0] not in PROTECTED or need <= 0:
             continue
         for j in (i + 1, i - 1):
-            if 0 <= j < len(raw) and raw[j][1] >= need:
+            if 0 <= j < len(raw) and _can_give(raw[j], need):
                 raw[j][1] -= need
                 seg[1] = FRAME_S
                 break
@@ -126,7 +133,7 @@ def track_from_alignments(alignments: list[tuple[str, int]], sr: int,
     segs: list[list] = []
     for shape, dur in raw:
         if dur <= 0:
-            continue
+            continue  # a phoneme Piper gave no samples
         if segs and (shape == segs[-1][0] or (shape not in PROTECTED and dur < MIN_HOLD_S)):
             segs[-1][1] += dur
         else:

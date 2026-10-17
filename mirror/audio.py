@@ -1,6 +1,7 @@
 """Audio I/O (sounddevice, imported lazily) and the mouth-level envelope."""
 from __future__ import annotations
 
+import logging
 import math
 import queue
 import threading
@@ -10,6 +11,9 @@ from typing import Callable, Optional
 import numpy as np
 
 CHUNK = 512  # ~32 ms at 16 kHz, matches the VAD frame size
+WRITE_CHUNK_S = 0.05  # playback is written in short blocks so it can be stopped
+
+log = logging.getLogger("mirror.audio")
 
 
 def mouth_envelope(samples: np.ndarray, sr: int, hop_s: float = 0.02) -> np.ndarray:
@@ -112,6 +116,25 @@ class Player:
             finally:
                 stream.close()
 
+    def _abort(self, stream, writer: threading.Thread, cancel: threading.Event) -> None:
+        """Stop the writer at its next chunk, then abort and discard the stream.
+
+        PortAudio isn't thread-safe and, on CoreAudio, abort() doesn't wake a
+        blocked write(), so the writer is stopped first and the stream is only
+        touched once it has exited."""
+        cancel.set()
+        if self._stream is stream:
+            self._stream, self._rate = None, None
+        writer.join(timeout=1.0)
+        if writer.is_alive():  # never touch a stream a write() is still inside
+            log.warning("audio writer did not stop; leaving the output stream open")
+            return
+        for op in (stream.abort, stream.close):
+            try:
+                op()
+            except Exception:  # noqa: BLE001 - best effort while already failing
+                pass
+
     def play(self, samples: np.ndarray, sr: int, on_level: Callable[[float], None]) -> None:
         """Play samples, calling on_level once per 20 ms hop in step with the audio,
         then once with 0.0; returns when playback has finished."""
@@ -120,21 +143,35 @@ class Player:
         self.open(sr)
         stream = self._stream
         errors: list[BaseException] = []
+        cancel = threading.Event()
+        data = np.ascontiguousarray(samples, dtype=np.float32).reshape(-1, 1)
+        chunk = max(1, int(sr * WRITE_CHUNK_S))
 
         def write() -> None:
             try:
-                stream.write(np.ascontiguousarray(samples, dtype=np.float32).reshape(-1, 1))
+                for i in range(0, len(data), chunk):
+                    if cancel.is_set():
+                        return
+                    stream.write(data[i:i + chunk])
             except Exception as e:  # noqa: BLE001 - re-raised on the calling thread
                 errors.append(e)
 
         writer = threading.Thread(target=write, name="player", daemon=True)
         writer.start()
         start = time.monotonic()
-        for i, level in enumerate(env):
-            delay = start + i * hop_s - time.monotonic()
-            if delay > 0:
-                time.sleep(delay)
-            on_level(float(level))
+        try:
+            for i, level in enumerate(env):
+                if errors:
+                    break  # the device failed: stop animating a silent mouth
+                delay = start + i * hop_s - time.monotonic()
+                if delay > 0:
+                    time.sleep(delay)
+                on_level(float(level))
+        except BaseException:
+            # Interrupted (shutdown signal, failing on_level): stop the blocked write
+            # before anyone closes the stream under it (PortAudio isn't thread-safe).
+            self._abort(stream, writer, cancel)
+            raise
         writer.join()
         if errors:
             self.close()
