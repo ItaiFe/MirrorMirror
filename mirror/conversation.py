@@ -101,7 +101,10 @@ class Controller:
     def _speak(self, text: str, lang: str) -> None:
         self._set_state(State.SPEAKING)
         samples, sr = self._tts.synth(text, lang)
-        self._player.play(samples, sr, on_level=lambda m: self._face.send(State.SPEAKING, m))
+        self._player.play(samples, sr, on_level=self._send_mouth)
+
+    def _send_mouth(self, level: float) -> None:
+        _guarded(self._face.send, State.SPEAKING, level)
 
     def _listen(self, timeout_s: float) -> None:
         self._deadline = self._clock() + timeout_s
@@ -115,5 +118,13 @@ class Controller:
         if state == self._state:
             return
         self._state = state
-        self._lights.set_state(state)
-        self._face.send(state, 0.0)
+        _guarded(self._lights.set_state, state)
+        _guarded(self._face.send, state, 0.0)
+
+
+def _guarded(sink: Callable, *args) -> None:
+    """Call a lights/face sink; a failing sink is logged, never raised."""
+    try:
+        sink(*args)
+    except Exception:
+        log.exception("sink %s failed", getattr(sink, "__qualname__", sink))

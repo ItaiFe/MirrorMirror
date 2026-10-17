@@ -82,9 +82,9 @@ class Clock:
         return self.t
 
 
-def make(script, llm=None, player=None, tts=None):
+def make(script, llm=None, player=None, tts=None, face=None):
     parts = dict(stt=FakeSTT(script), llm=llm or FakeLLM(), tts=tts or FakeTTS(),
-                 player=player or FakePlayer(), lights=FakeLights(), face=FakeFace())
+                 player=player or FakePlayer(), lights=FakeLights(), face=face or FakeFace())
     clock = Clock()
     ctl = Controller(cfg=ConversationConfig(), clock=clock, **parts)
     return ctl, parts, clock
@@ -222,11 +222,46 @@ def test_stt_failure_in_listening_stays_listening():
 
 
 def test_tts_failure_goes_idle_without_raising():
-    class BrokenTTS(FakeTTS):
+    class BrokenOnSecondTTS(FakeTTS):
         def synth(self, text, lang):
-            raise RuntimeError("no voice")
+            if self.calls:
+                raise RuntimeError("no voice")
+            return super().synth(text, lang)
 
-    ctl, p, _ = make([Transcript("mirror mirror who", "en")], tts=BrokenTTS())
+    ctl, p, _ = make([Transcript("mirror mirror who", "en"),
+                      Transcript("and then?", "en"),
+                      Transcript("mirror mirror again", "en")],
+                     tts=BrokenOnSecondTTS())
+    ctl.on_segment(SEG)  # answered, history now has 2 messages
+    ctl.on_segment(SEG)  # follow-up; TTS raises
+    assert ctl.state == State.IDLE
+    assert p["lights"].states[-1] == State.IDLE
+    ctl.on_segment(SEG)
+    assert p["llm"].calls[-1][0] == []  # history was cleared
+
+
+class RaisingFace(FakeFace):
+    def send(self, state, mouth):
+        super().send(state, mouth)
+        raise OSError("bus down")
+
+
+def test_failing_face_bus_never_escapes():
+    ctl, p, clock = make([Transcript("mirror mirror who", "en"),
+                          Transcript("mirror mirror", "en")], face=RaisingFace())
+    ctl.on_segment(SEG)  # full answer with every face send raising
+    assert ctl.state == State.LISTENING
+    assert p["player"].plays == 1
+    assert (State.SPEAKING, 0.9) in p["face"].msgs  # playback not aborted
+    assert p["lights"].states == [State.THINKING, State.SPEAKING, State.LISTENING]
+    clock.t += 6.1
+    ctl.tick()
+    assert ctl.state == State.IDLE
+
+
+def test_failing_face_bus_in_error_path_never_escapes():
+    ctl, p, _ = make([Transcript("mirror mirror who", "en")],
+                     llm=FakeLLM([RuntimeError("unexpected")]), face=RaisingFace())
     ctl.on_segment(SEG)
     assert ctl.state == State.IDLE
 
