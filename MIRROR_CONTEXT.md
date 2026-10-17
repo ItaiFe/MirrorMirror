@@ -30,7 +30,7 @@ language. Fully offline. Placed away from loud areas.
   "mirror mirror" or "מראה מראה" (fuzzy match, spelling variants
   allowed). "on the wall" / "שעל הקיר" optional. Speech after the
   phrase in the same segment is the question.
-- Power: 12 V 600 W (amp, strip, fan; each branch fused at 10 A);
+- Power at the event: 220 V AC standard outlet feeding all supplies. 12 V 600 W (amp, strip, fan; each branch fused at 10 A);
   separate 5 V (panels, cards); Orin on its own supply.
 - Storage: high-endurance microSD (no SSD). Keep writes minimal: logs
   in RAM (volatile journald), no swap on the card.
