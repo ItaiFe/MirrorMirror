@@ -1,0 +1,30 @@
+# Development config for macOS: windowed face, system default audio, log-only lights.
+[audio]
+sample_rate = 16000
+
+[servers]
+stt_url = "http://127.0.0.1:8081"
+llm_url = "http://127.0.0.1:8080"
+timeout_s = 20
+
+[tts]
+piper_voice_en = "models/en_US-lessac-medium.onnx"
+mms_model_he = "facebook/mms-tts-heb"
+
+[face]
+size = 252
+screen_w = 1920   # unused when fullscreen = false
+screen_h = 1080
+fullscreen = false
+window_scale = 3
+bus_port = 7777
+
+[lights]
+kind = "log"
+baud = 115200
+
+[conversation]
+listen_timeout_s = 8.0
+followup_s = 6.0
+max_reply_sentences = 3
+max_reply_chars = 300

@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mirror"
+version = "0.1.0"
+description = "Mirror, Mirror: a talking LED mirror"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy",
+    "pygame",
+    "requests",
+    "tomli; python_version < '3.11'",
+]
+
+[project.optional-dependencies]
+hw = ["sounddevice", "pyserial", "onnxruntime"]
+tts = ["piper-tts", "transformers", "torch"]
+dev = ["pytest", "responses"]
+
+[project.scripts]
+mirror-voice = "mirror.voice_main:main"
+mirror-face = "mirror.face.app:main"
+
+[tool.setuptools.packages.find]
+include = ["mirror", "mirror.*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
