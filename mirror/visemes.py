@@ -15,7 +15,10 @@ import numpy as np
 
 FPS = 30
 FRAME_S = 1.0 / FPS
-MIN_HOLD_S = 2 * FRAME_S  # shorter segments are absorbed into the previous one
+MIN_HOLD_S = 2 * FRAME_S  # shorter unprotected segments are absorbed into the previous one
+# Brief consonant shapes that must stay visible (closed lips, teeth on lip, tongue up,
+# pucker): never absorbed, and lengthened to at least one frame.
+PROTECTED = frozenset("AFGH")
 
 _SHAPES = {
     "A": "m b p ɱ",
@@ -88,10 +91,12 @@ def track_from_alignments(alignments: list[tuple[str, int]], sr: int,
                           total_samples: int) -> VisemeTrack:
     """Build a viseme track from per-phoneme sample counts.
 
-    The counts are rescaled to total_samples (the real audio length). Runs of the
-    same shape are merged, any segment but the first that is shorter than
-    MIN_HOLD_S is absorbed into the previous one, and a one-frame B is put between
-    adjacent A and D when both are long enough to give up half a frame each.
+    The counts are rescaled to total_samples (the real audio length) and runs of
+    the same shape are merged. PROTECTED shapes shorter than a frame are lengthened
+    to one frame, taking the time from the following segment (or the previous one).
+    Any other segment but the first that is shorter than MIN_HOLD_S is absorbed into
+    the previous one. A one-frame B is put between adjacent A and D when both last
+    at least MIN_HOLD_S, so each can give up half a frame.
     """
     total = sum(n for _, n in alignments)
     end = total_samples / sr
@@ -99,10 +104,30 @@ def track_from_alignments(alignments: list[tuple[str, int]], sr: int,
         return VisemeTrack(np.zeros(0), [], end)
     scale = total_samples / (total * sr)  # samples -> seconds of real audio
 
-    segs: list[list] = []  # [shape, duration_s]
+    raw: list[list] = []  # [shape, duration_s], identical neighbours merged
     for shape, n in _shape_segments(alignments):
-        dur = n * scale
-        if segs and (shape == segs[-1][0] or dur < MIN_HOLD_S):
+        if raw and shape == raw[-1][0]:
+            raw[-1][1] += n * scale
+        else:
+            raw.append([shape, n * scale])
+
+    # Protected shapes last at least one frame, borrowing from the next segment
+    # (or the previous one when the next can't spare it).
+    for i, seg in enumerate(raw):
+        need = FRAME_S - seg[1]
+        if seg[0] not in PROTECTED or need <= 0:
+            continue
+        for j in (i + 1, i - 1):
+            if 0 <= j < len(raw) and raw[j][1] >= need:
+                raw[j][1] -= need
+                seg[1] = FRAME_S
+                break
+
+    segs: list[list] = []
+    for shape, dur in raw:
+        if dur <= 0:
+            continue
+        if segs and (shape == segs[-1][0] or (shape not in PROTECTED and dur < MIN_HOLD_S)):
             segs[-1][1] += dur
         else:
             segs.append([shape, dur])

@@ -185,6 +185,7 @@ def run(cfg: Config, wav_path=None) -> int:
     face = FaceBus.sender(cfg.face.bus_port)
     raw_lights = (WledSerial(cfg.lights.serial_port, cfg.lights.baud)
                   if cfg.lights.kind == "wled" else LogLights())
+    output = Player(find_device(cfg.audio.output_device, "output"))
     try:
         _push_idle(raw_lights, face)
         gate = AnswerGate(raw_lights)
@@ -196,9 +197,12 @@ def run(cfg: Config, wav_path=None) -> int:
                              cfg.conversation.max_reply_sentences,
                              cfg.conversation.max_reply_chars)
         log.info("loading TTS voices (Hebrew: %s)", cfg.tts.he_engine)
-        tts = TTSRouter(PiperTTS(cfg.tts.piper_voice_en), build_hebrew_tts(cfg.tts))
+        en_tts = PiperTTS(cfg.tts.piper_voice_en)
+        tts = TTSRouter(en_tts, build_hebrew_tts(cfg.tts))
         tts.warmup()
-        player = LatencyPlayer(Player(find_device(cfg.audio.output_device, "output")))
+        # Open the speaker now: the first open of a cold output device can take seconds.
+        output.open(en_tts.sample_rate)
+        player = LatencyPlayer(output)
         controller = Controller(stt, llm, tts, player, gate, face, cfg.conversation)
 
         if wav_path:
@@ -250,6 +254,8 @@ def run(cfg: Config, wav_path=None) -> int:
     finally:
         stop.set()
         face.close()
+        with contextlib.suppress(Exception):
+            output.close()
 
 
 def main() -> None:

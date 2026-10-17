@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import math
 import queue
+import threading
 import time
 from typing import Callable, Optional
 
@@ -79,20 +80,67 @@ class Mic:
 
 
 class Player:
+    """Plays mono float32 audio on one persistent output stream.
+
+    Opening a CoreAudio/ALSA output can take seconds on a cold device, so the
+    stream is opened once (open(), or the first play) and reused; it is reopened
+    only when the sample rate changes or after a write error.
+    """
+
     def __init__(self, device: Optional[int]):
         self.device = device
+        self._stream = None
+        self._rate: Optional[int] = None
 
-    def play(self, samples: np.ndarray, sr: int, on_level: Callable[[float], None]) -> None:
+    def open(self, sr: int) -> None:
+        """Open and start the output stream at sr (a no-op if it already is)."""
+        if self._stream is not None and self._rate == sr:
+            return
         import sounddevice as sd
 
+        self.close()
+        stream = sd.OutputStream(samplerate=sr, device=self.device, channels=1,
+                                 dtype="float32")
+        stream.start()
+        self._stream, self._rate = stream, sr
+
+    def close(self) -> None:
+        if self._stream is not None:
+            stream, self._stream, self._rate = self._stream, None, None
+            try:
+                stream.stop()
+            finally:
+                stream.close()
+
+    def play(self, samples: np.ndarray, sr: int, on_level: Callable[[float], None]) -> None:
+        """Play samples, calling on_level once per 20 ms hop in step with the audio,
+        then once with 0.0; returns when playback has finished."""
         hop_s = 0.02
         env = mouth_envelope(samples, sr, hop_s)
-        sd.play(samples, sr, device=self.device)
+        self.open(sr)
+        stream = self._stream
+        errors: list[BaseException] = []
+
+        def write() -> None:
+            try:
+                stream.write(np.ascontiguousarray(samples, dtype=np.float32).reshape(-1, 1))
+            except Exception as e:  # noqa: BLE001 - re-raised on the calling thread
+                errors.append(e)
+
+        writer = threading.Thread(target=write, name="player", daemon=True)
+        writer.start()
         start = time.monotonic()
         for i, level in enumerate(env):
             delay = start + i * hop_s - time.monotonic()
             if delay > 0:
                 time.sleep(delay)
             on_level(float(level))
-        sd.wait()
+        writer.join()
+        if errors:
+            self.close()
+            raise errors[0]
+        # write() returns once the last samples are queued; wait until they are heard
+        tail = start + len(samples) / sr + float(stream.latency) - time.monotonic()
+        if tail > 0:
+            time.sleep(tail)
         on_level(0.0)

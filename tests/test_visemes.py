@@ -32,6 +32,27 @@ def test_merge_and_min_hold():
     assert track.times[2] == pytest.approx(5400 / SR)
 
 
+def test_protected_shapes_survive():
+    track = track_from_alignments([("a", 3000), ("m", 600), ("a", 3000)],
+                                  sr=SR, total_samples=6600)
+    assert track.shapes == ["D", "A", "D"]
+    assert durations(track)[1] >= FRAME_S - 1e-9
+    assert track.end == pytest.approx(6600 / SR)  # the time came from the next "a"
+
+
+def test_protected_shape_borrows_from_previous_at_end():
+    track = track_from_alignments([("a", 3000), ("f", 300)], sr=SR, total_samples=3300)
+    assert track.shapes == ["D", "G"]
+    assert durations(track)[1] == pytest.approx(FRAME_S)
+
+
+def test_short_unprotected_still_absorbed_after_protected():
+    # "l" is protected and kept; the short "t" after it is absorbed into it
+    track = track_from_alignments([("a", 3000), ("l", 2000), ("t", 200), ("o", 3000)],
+                                  sr=SR, total_samples=8200)
+    assert track.shapes == ["D", "H", "E"]
+
+
 def test_insert_b_between_a_and_d():
     track = track_from_alignments([("m", 3000), ("a", 3000)], sr=SR, total_samples=6000)
     assert track.shapes == ["A", "B", "D"]

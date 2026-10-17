@@ -57,6 +57,10 @@ class PiperTTS:
         self._rate = int(self._voice.config.sample_rate)
         self._tracks = _Tracks(f"piper {voice_path}")
 
+    @property
+    def sample_rate(self) -> int:
+        return self._rate
+
     def synth(self, text: str) -> tuple[np.ndarray, int]:
         voice = self._voice
         if hasattr(voice, "synthesize_stream_raw"):
