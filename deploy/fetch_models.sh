@@ -34,7 +34,19 @@ PIPER="$HF/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium"
 fetch "$PIPER/en_US-lessac-medium.onnx" en_US-lessac-medium.onnx
 fetch "$PIPER/en_US-lessac-medium.onnx.json" en_US-lessac-medium.onnx.json
 
-echo "cache facebook/mms-tts-heb -> $DIR/hf"
-HF_HOME="$DIR/hf" "$PYTHON" -c \
-    "from huggingface_hub import snapshot_download; snapshot_download('facebook/mms-tts-heb', ignore_patterns=['*.bin'])"
+# Hebrew voice: Phonikud G2P (MIT) + Phonikud Piper voice (non-commercial, see
+# https://huggingface.co/Phonikud/phonikud-tts-checkpoints), pinned revisions.
+PHONIKUD_G2P="$HF/Phonikud/phonikud-onnx/resolve/b806189fe1fc0085b1012b7560ffb5e8ecfd72a2"
+PHONIKUD_TTS="$HF/Phonikud/phonikud-tts-checkpoints/resolve/ff64ba389a3833c49a85c58fc51a7060a6984b87"
+fetch "$PHONIKUD_G2P/phonikud-1.0.int8.onnx" phonikud-1.0.int8.onnx
+fetch "$PHONIKUD_TTS/model.onnx" phonikud-tts-he.onnx
+fetch "$PHONIKUD_TTS/model.config.json" phonikud-tts-he.onnx.json
+
+# Hugging Face cache: Phonikud's tokenizer (loaded by name, so on the main ref)
+# and the MMS Hebrew fallback voice.
+echo "cache dicta-il/dictabert-large-char-menaked tokenizer, facebook/mms-tts-heb -> $DIR/hf"
+HF_HOME="$DIR/hf" "$PYTHON" -c "
+from huggingface_hub import snapshot_download
+snapshot_download('dicta-il/dictabert-large-char-menaked', allow_patterns=['tokenizer.json'])
+snapshot_download('facebook/mms-tts-heb', ignore_patterns=['*.bin'])"
 echo "done"

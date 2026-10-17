@@ -6,7 +6,7 @@ Software for the talking LED mirror. Spec: `MIRROR_CONTEXT.md`.
 
 ```sh
 uv venv --python 3.11 .venv && uv pip install --python .venv -e '.[dev,hw,tts]'
-make models        # deploy/fetch_models.sh models (whisper small, Gemma 3 4B, Silero, Piper, MMS cache)
+make models        # deploy/fetch_models.sh models (whisper small, Gemma 3 4B, Silero, Piper, Phonikud, MMS cache)
 make test
 make servers-mac   # just whisper-server :8081 + llama-server :8080 (Ctrl-C stops both)
 make dev           # servers in background (logs in /tmp/mirror-dev), wait for /health, then face + voice
@@ -26,6 +26,7 @@ hang-over silence; the whole reply is synthesized before playback starts):
 |---|---|---|---|---|---|
 | English (Piper WAV) | Gemma 3 4B Q4_K_M | 0.9-1.6 s | 2.9-3.9 s | Piper ~1.2-1.6 s | 6.5-6.7 s |
 | Hebrew (MMS WAV, vocalized) | Gemma 3 4B Q4_K_M | 1.5-2.1 s | 4.2-5.0 s | MMS ~7-9 s | 13.3-16.6 s |
+| Hebrew (Phonikud WAV, unvocalized) | Gemma 3 4B Q4_K_M | 0.9 s | 2.5-3.4 s | Phonikud ~0.5 s | 4.5-5.5 s |
 | English | Gemma 3 1B Q4_K_M | 0.85 s | 0.3 s | 0.16 s | 1.9 s |
 | Hebrew (vocalized) | Gemma 3 1B Q4_K_M | 0.8 s | 1.9 s | MMS 3.7 s | 6.8 s |
 | English, live via `make dev` (speaker -> mic) | Gemma 3 4B | 4.3 s | 6.1 s | 3.1 s | 14.0 s |
@@ -38,3 +39,7 @@ Notes:
 - whisper-server reports the language as a full name (`"language": "hebrew"`).
 - MMS reads unvocalized Hebrew poorly: "מראה מראה שעל הקיר" synthesized without niqqud was
   heard by whisper as "מה אמר אש על הקיר" (no wake). With niqqud it woke.
+- The Hebrew voice is now Phonikud + Piper (`tts.he_engine = "phonikud"`; `"mms"` is the
+  fallback). It synthesizes a three-sentence reply in ~0.5 s vs MMS ~2.5-4 s. Whisper hears
+  "מראה, מראה שעל הקיר, מי הכי יפה?" correctly (wake); without the comma it hears "מהה, מהה".
+  The Phonikud voice checkpoints are non-commercial (see the Task 13 report for the license).

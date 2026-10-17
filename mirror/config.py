@@ -24,6 +24,10 @@ class ServersConfig:
 @dataclass
 class TtsConfig:
     piper_voice_en: str = "models/en_US-lessac-medium.onnx"
+    he_engine: str = "phonikud"  # "phonikud" | "mms"
+    phonikud_model: str = "models/phonikud-1.0.int8.onnx"
+    phonikud_voice_he: str = "models/phonikud-tts-he.onnx"
+    phonikud_voice_config_he: Optional[str] = None  # default: <phonikud_voice_he>.json
     mms_model_he: str = "facebook/mms-tts-heb"
 
 

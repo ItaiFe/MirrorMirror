@@ -7,6 +7,9 @@ def test_load_mac_config():
     assert c.lights.kind == "log"
     assert c.servers.llm_url.startswith("http://127.0.0.1")
     assert c.models_dir == "models"
+    assert c.tts.he_engine == "phonikud"
+    assert c.tts.phonikud_model == "models/phonikud-1.0.int8.onnx"
+    assert c.tts.phonikud_voice_he == "models/phonikud-tts-he.onnx"
 
 
 def test_load_orin_config():
@@ -14,3 +17,5 @@ def test_load_orin_config():
     assert (c.face.screen_w, c.face.screen_h) == (1920, 1080) and c.face.fullscreen is True
     assert c.lights.kind == "wled" and c.lights.serial_port == "/dev/ttyUSB0"
     assert c.models_dir == "/home/mirror/mirror-models"
+    assert c.tts.he_engine == "phonikud"
+    assert c.tts.phonikud_voice_he == "/home/mirror/mirror-models/phonikud-tts-he.onnx"

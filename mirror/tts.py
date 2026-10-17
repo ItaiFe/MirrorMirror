@@ -1,6 +1,9 @@
-"""Bilingual text-to-speech: Piper (English), Meta MMS (Hebrew), and a router."""
+"""Bilingual text-to-speech: Piper (English), Phonikud + Piper or Meta MMS (Hebrew),
+and a router."""
 from __future__ import annotations
 
+import json
+import re
 from typing import Protocol
 
 import numpy as np
@@ -44,6 +47,61 @@ class PiperTTS:
                     parts.append(np.asarray(chunk.audio_float_array))
             audio = np.concatenate(parts) if parts else np.zeros(0, np.float32)
         return _normalize(audio, self._rate)
+
+
+# A Hebrew prefix letter joined to a number by a hyphen or maqaf ("ו-25", "ב־3").
+# Phonikud reads that hyphen as "minus", so it is dropped.
+_PREFIX_HYPHEN_NUMBER = re.compile(r"(?<=[\u05d0-\u05ea])[-\u05be](?=\d)")
+
+
+def prepare_hebrew(text: str) -> str:
+    """Normalize plain Hebrew text before Phonikud diacritizes and phonemizes it."""
+    text = _PREFIX_HYPHEN_NUMBER.sub("", text)
+    return " ".join(text.split())
+
+
+class PhonikudHebrewTTS:
+    """Plain Hebrew text -> Phonikud (niqqud, stress) -> IPA -> Piper VITS voice (ONNX, CPU).
+
+    Phonikud loads its character tokenizer (dicta-il/dictabert-large-char-menaked)
+    through the Hugging Face cache, so HF_HOME must point at a cache that has it
+    (deploy/fetch_models.sh puts it in MODELS_DIR/hf).
+    """
+
+    def __init__(self, phonikud_model: str, voice_model: str, voice_config: str | None = None):
+        import onnxruntime  # lazy: heavy optional deps
+        from phonikud import phonemize
+        from phonikud_onnx import Phonikud
+        from piper.config import PiperConfig
+        from piper.voice import PiperVoice
+
+        cpu = ["CPUExecutionProvider"]  # keep the GPU free for the LLM
+        self._phonemize = phonemize
+        self._diacritizer = Phonikud.from_session(
+            onnxruntime.InferenceSession(phonikud_model, providers=cpu))
+        with open(voice_config or f"{voice_model}.json", encoding="utf-8") as f:
+            config = json.load(f)
+        # The voice takes raw IPA characters ("phoneme_type": "raw"), which piper's
+        # config enum doesn't know. Phonemes are always passed in, so piper's own
+        # phonemizer is never used and "text" is a safe stand-in.
+        config["phoneme_type"] = "text"
+        self._voice = PiperVoice(
+            session=onnxruntime.InferenceSession(voice_model, providers=cpu),
+            config=PiperConfig.from_dict(config))
+        self._known = set(self._voice.config.phoneme_id_map)
+        self._rate = int(self._voice.config.sample_rate)
+
+    def phonemes(self, text: str) -> str:
+        """IPA for plain Hebrew text (characters the voice doesn't know are dropped)."""
+        ipa = self._phonemize(self._diacritizer.add_diacritics(prepare_hebrew(text)))
+        return "".join(c for c in ipa if c in self._known).strip()
+
+    def synth(self, text: str) -> tuple[np.ndarray, int]:
+        ipa = self.phonemes(text)
+        if not ipa:
+            return np.zeros(0, np.float32), self._rate
+        ids = self._voice.phonemes_to_ids(list(ipa))
+        return _normalize(self._voice.phoneme_ids_to_audio(ids), self._rate)
 
 
 class MmsHebrewTTS:

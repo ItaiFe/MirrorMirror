@@ -3,9 +3,11 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from mirror.tts import TTSRouter
+from mirror.tts import TTSRouter, prepare_hebrew
 
 PIPER_MODEL = Path("models/en_US-lessac-medium.onnx")
+PHONIKUD_MODEL = Path("models/phonikud-1.0.int8.onnx")
+PHONIKUD_VOICE = Path("models/phonikud-tts-he.onnx")
 
 
 class FakeSynth:
@@ -30,6 +32,24 @@ def test_router_picks_language():
     a, r = router.synth("bonjour", "fr")
     assert r == 22050 and np.allclose(a, 0.1)
     assert he.calls == ["shalom"] and en.calls == ["hello", "bonjour"]
+
+
+def test_router_routes_he_to_configured_engine():
+    he = FakeSynth(np.full(4, 0.3, dtype=np.float32), 22050)
+    router = TTSRouter(en=FakeSynth(np.zeros(4)), he=he)
+    a, r = router.synth("מראה", "he")
+    assert r == 22050 and np.allclose(a, 0.3) and he.calls == ["מראה"]
+
+
+def test_prepare_hebrew_drops_hyphen_before_number():
+    # Phonikud reads "-25" as "minus 25"; a prefix letter + hyphen + digits is just a prefix.
+    assert prepare_hebrew("ו-25 שקלים") == "ו25 שקלים"
+    assert prepare_hebrew("ב־3 בלילה") == "ב3 בלילה"  # maqaf
+    assert prepare_hebrew("בשנת 1948, 3-4 ימים") == "בשנת 1948, 3-4 ימים"
+
+
+def test_prepare_hebrew_collapses_whitespace():
+    assert prepare_hebrew("  שלום\n\nעולם  ") == "שלום עולם"
 
 
 def test_router_output_float32_mono():
@@ -76,3 +96,20 @@ def test_mms_real():
         pytest.skip("MMS model not in HF cache")
     audio, rate = tts.synth("שלום")
     assert len(audio) / rate > 0.2
+
+
+@pytest.mark.slow
+def test_phonikud_real():
+    pytest.importorskip("phonikud")
+    pytest.importorskip("phonikud_onnx")
+    pytest.importorskip("piper")
+    if not (PHONIKUD_MODEL.exists() and PHONIKUD_VOICE.exists()):
+        pytest.skip("phonikud models missing")
+    from mirror.tts import PhonikudHebrewTTS
+
+    tts = PhonikudHebrewTTS(str(PHONIKUD_MODEL), str(PHONIKUD_VOICE))
+    audio, rate = tts.synth("מראה מראה שעל הקיר, מי הכי יפה?")
+    assert rate == 22050
+    assert audio.dtype == np.float32 and audio.ndim == 1
+    assert len(audio) / rate > 0.5
+    assert 0.01 < np.abs(audio).max() <= 1.0

@@ -16,7 +16,7 @@ dependencies = [
 
 [project.optional-dependencies]
 hw = ["sounddevice", "pyserial", "onnxruntime"]
-tts = ["piper-tts", "transformers", "torch"]
+tts = ["piper-tts", "phonikud", "phonikud-onnx", "transformers", "torch"]
 dev = ["pytest", "responses"]
 
 [project.scripts]

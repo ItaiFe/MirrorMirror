@@ -13,6 +13,9 @@ timeout_s = 20
 
 [tts]
 piper_voice_en = "/home/mirror/mirror-models/en_US-lessac-medium.onnx"
+he_engine = "phonikud"   # "phonikud" (Phonikud G2P + Piper voice) | "mms" (Meta MMS fallback)
+phonikud_model = "/home/mirror/mirror-models/phonikud-1.0.int8.onnx"
+phonikud_voice_he = "/home/mirror/mirror-models/phonikud-tts-he.onnx"   # config: same path + ".json"
 mms_model_he = "facebook/mms-tts-heb"
 
 [face]

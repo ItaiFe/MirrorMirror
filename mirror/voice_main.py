@@ -21,7 +21,7 @@ import numpy as np
 
 from mirror.audio import CHUNK, Mic, Player, find_device
 from mirror.bus import FaceBus
-from mirror.config import Config, load_config
+from mirror.config import Config, TtsConfig, load_config
 from mirror.conversation import Controller
 from mirror.lights import LogLights, WledSerial
 from mirror.llm import LlamaServerLLM
@@ -153,12 +153,25 @@ def _push_idle(lights, face) -> None:
             log.exception("startup idle push failed")
 
 
+def build_hebrew_tts(tts_cfg: TtsConfig):
+    """The Hebrew engine named by tts.he_engine."""
+    from mirror import tts
+
+    if tts_cfg.he_engine == "phonikud":
+        return tts.PhonikudHebrewTTS(tts_cfg.phonikud_model, tts_cfg.phonikud_voice_he,
+                                     tts_cfg.phonikud_voice_config_he)
+    if tts_cfg.he_engine == "mms":
+        return tts.MmsHebrewTTS(tts_cfg.mms_model_he)
+    raise ValueError(f"unknown tts.he_engine {tts_cfg.he_engine!r} (phonikud | mms)")
+
+
 def run(cfg: Config, wav_path=None) -> int:
     models_dir = os.path.abspath(cfg.models_dir)
-    # MMS loads through transformers; it must come from the local cache, offline.
+    # MMS (transformers) and Phonikud's tokenizer load through the Hugging Face hub;
+    # they must come from the local cache, offline.
     os.environ["HF_HUB_OFFLINE"] = "1"
     os.environ["HF_HOME"] = os.path.join(models_dir, "hf")
-    from mirror.tts import MmsHebrewTTS, PiperTTS, TTSRouter  # after the env is set
+    from mirror.tts import PiperTTS, TTSRouter  # after the env is set
 
     stop = threading.Event()
 
@@ -182,8 +195,8 @@ def run(cfg: Config, wav_path=None) -> int:
         llm = LlamaServerLLM(cfg.servers.llm_url, cfg.servers.timeout_s,
                              cfg.conversation.max_reply_sentences,
                              cfg.conversation.max_reply_chars)
-        log.info("loading TTS voices")
-        tts = TTSRouter(PiperTTS(cfg.tts.piper_voice_en), MmsHebrewTTS(cfg.tts.mms_model_he))
+        log.info("loading TTS voices (Hebrew: %s)", cfg.tts.he_engine)
+        tts = TTSRouter(PiperTTS(cfg.tts.piper_voice_en), build_hebrew_tts(cfg.tts))
         tts.warmup()
         player = LatencyPlayer(Player(find_device(cfg.audio.output_device, "output")))
         controller = Controller(stt, llm, tts, player, gate, face, cfg.conversation)
