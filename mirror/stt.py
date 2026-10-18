@@ -60,4 +60,5 @@ class WhisperServerSTT:
             raise STTError(f"malformed whisper-server response: {e}") from e
         lang = payload.get(LANGUAGE_FIELD) or payload.get(_LANGUAGE_FALLBACK_FIELD)
         is_hebrew = str(lang).strip().lower() in _HEBREW
-        return Transcript(str(text).strip(), "he" if is_hebrew else "en")
+        text = "" if text is None else str(text)  # {"text": null}: heard nothing
+        return Transcript(text.strip(), "he" if is_hebrew else "en")

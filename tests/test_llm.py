@@ -294,3 +294,25 @@ def test_hebrew_prompt_has_plural_examples_before_world():
         assert he.index(answer) < he.index("WORLD")
     assert len({a.split()[0] for _, a in HEBREW_EXAMPLES}) == 3  # varied openings
     assert "רק את הטון" in he  # the examples are not to be copied
+
+
+def test_null_content_is_an_error_not_none():
+    with patch("mirror.llm.requests.post", return_value=_ok(None)):
+        with pytest.raises(LLMError):
+            LlamaServerLLM("http://x", 1).reply([], "hi", "en")
+
+
+def test_system_prompt_unknown_language_falls_back_to_english():
+    assert system_prompt("fr", "W", NOW) == system_prompt("en", "W", NOW)
+
+
+def test_stream_logs_first_token_time_even_when_cut(caplog):
+    """llama-server's timings come in the last chunk, which a reply cut at
+    max_sentences never reads; the client-side time to first token is logged."""
+    with patch("mirror.llm.requests.post",
+               return_value=_sse("One. Two. Three. Four.", " Five.")):
+        with caplog.at_level(logging.INFO, logger="mirror.llm"):
+            out = list(LlamaServerLLM("http://x", 5, max_sentences=2)
+                       .reply_stream([], "hi", "en"))
+    assert out == ["One.", "Two."]
+    assert "first token" in caplog.text

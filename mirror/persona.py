@@ -130,7 +130,9 @@ def system_prompt(lang: str, world: str, now: datetime) -> str:
     """The oracle prompt (with its few-shot examples, Hebrew only), then the world
     background, then the time line. The time
     line is last so the long prefix stays identical between requests (llama-server
-    reuses its cached prompt prefix)."""
+    reuses its cached prompt prefix). An unknown language gets the English prompt."""
+    if lang not in SYSTEM_PROMPT:
+        lang = "en"
     time_line = _TIME_LINE[lang].format(day=_WEEKDAYS[lang][now.weekday()],
                                         part=_PARTS[lang][_part_of_day(now.hour)])
     examples = _examples(lang)

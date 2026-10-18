@@ -215,6 +215,8 @@ class MmsHebrewTTS:
         self._rate = int(self._model.config.sampling_rate)
 
     def synth(self, text: str) -> tuple[np.ndarray, int]:
+        if not text.strip():  # the tokenizer/VITS model can't take an empty input
+            return np.zeros(0, np.float32), self._rate
         inputs = self._tokenizer(text, return_tensors="pt").to(self._device)
         with self._torch.no_grad():
             wave = self._model(**inputs).waveform[0]

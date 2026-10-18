@@ -97,3 +97,9 @@ def test_real_whisper_server_response(name, text, lang):
     body = (FIXTURES / name).read_text(encoding="utf-8")
     responses.post(URL + "/inference", body=body, content_type="application/json")
     assert make().transcribe(SAMPLES) == Transcript(text, lang)
+
+
+@responses.activate
+def test_null_text_is_empty():
+    responses.post(URL + "/inference", json={"text": None, "language": "en"})
+    assert make().transcribe(SAMPLES) == Transcript("", "en")

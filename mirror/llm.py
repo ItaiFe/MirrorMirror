@@ -5,6 +5,7 @@ import json
 import logging
 import re
 import threading
+import time
 import unicodedata
 from datetime import datetime
 from typing import Callable, Iterator
@@ -146,6 +147,8 @@ class LlamaServerLLM:
             )
             resp.raise_for_status()
             content = resp.json()["choices"][0]["message"]["content"]
+            if content is None:
+                raise ValueError("null content")
         except requests.exceptions.RequestException as e:  # incl. Timeout, HTTPError
             raise LLMError(f"llama-server request failed: {e}") from e
         except (ValueError, KeyError, IndexError, TypeError) as e:  # bad JSON shape
@@ -196,6 +199,9 @@ class LlamaServerLLM:
                        cancel: threading.Event | None) -> Iterator[str]:
         """Uncleaned sentences from the SSE stream; the remainder is flushed at the end."""
         body = dict(self._body(history, user_text, lang), stream=True)
+        # llama-server's timings arrive in the final chunk, which a reply cut at
+        # max_sentences never reads: log the client-side time to first token too
+        t0, first = time.monotonic(), True
         with requests.post(self._endpoint, json=body, timeout=self._timeout_s,
                            stream=True) as resp:
             resp.raise_for_status()
@@ -221,6 +227,10 @@ class LlamaServerLLM:
                 delta = chunk["choices"][0].get("delta", {}).get("content")
                 if not delta:
                     continue
+                if first:
+                    first = False
+                    log.info("llm first token (%s): %.0f ms", lang,
+                             1000.0 * (time.monotonic() - t0))
                 done, buf = _pop_sentences(buf + delta)
                 yield from done
             if buf.strip():

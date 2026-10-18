@@ -226,3 +226,73 @@ def test_phonikud_alignments_real():
     shapes = set(track.shapes)
     assert shapes <= set("ABCDEFGHX")
     assert len(shapes) >= 3 and shapes & {"B", "C"}
+
+
+# --- fast stubs for the Hebrew engines ---------------------------------------------
+
+def _stub_phonikud(ipa):
+    """A PhonikudHebrewTTS with its models replaced by stubs (no model files)."""
+    from mirror.tts import PhonikudHebrewTTS, _Tracks
+
+    tts = object.__new__(PhonikudHebrewTTS)
+    calls = {}
+
+    class Diacritizer:
+        def add_diacritics(self, text):
+            calls["diacritize"] = text
+            return text + "!"
+
+    class Voice:
+        config = types.SimpleNamespace(phoneme_id_map={"_": [0], "^": [1], "$": [2],
+                                                       "a": [3], "b": [4]},
+                                       sample_rate=22050)
+
+        def phonemes_to_ids(self, phonemes):
+            calls["phonemes"] = phonemes
+            return [3] * len(phonemes)
+
+        def phoneme_ids_to_audio(self, ids, include_alignments=False):
+            calls["ids"] = ids
+            return np.full(100 * len(ids), 16384, np.int16)
+
+    tts._phonemize = lambda text: calls.setdefault("phonemize", text) and ipa
+    tts._diacritizer = Diacritizer()
+    tts._voice = Voice()
+    tts._known = set(Voice.config.phoneme_id_map)
+    tts._rate = 22050
+    tts._tracks = _Tracks("stub")
+    return tts, calls
+
+
+def test_phonikud_phonemes_prepares_and_drops_unknown_characters():
+    tts, calls = _stub_phonikud(" a?b ")
+    assert tts.phonemes("ו-25  שלום") == "ab"
+    assert calls["diacritize"] == "ו25 שלום"  # prepare_hebrew ran first
+    assert calls["phonemize"] == "ו25 שלום!"
+
+
+def test_phonikud_synth_returns_float_audio():
+    tts, calls = _stub_phonikud("ab")
+    audio, sr = tts.synth("שלום")
+    assert sr == 22050 and audio.dtype == np.float32 and len(audio) == 200
+    assert np.allclose(audio, 0.5) and calls["phonemes"] == ["a", "b"]
+
+
+def test_phonikud_synth_empty_when_nothing_pronounceable():
+    tts, calls = _stub_phonikud("?!")
+    audio, sr = tts.synth("...")
+    assert len(audio) == 0 and sr == 22050 and "ids" not in calls
+
+
+def test_mms_empty_text_returns_empty_audio():
+    from mirror.tts import MmsHebrewTTS
+
+    tts = object.__new__(MmsHebrewTTS)
+    tts._rate = 16000
+
+    def boom(*args, **kwargs):
+        raise AssertionError("the model must not run on empty text")
+
+    tts._tokenizer = boom
+    audio, sr = tts.synth("   ")
+    assert len(audio) == 0 and audio.dtype == np.float32 and sr == 16000
