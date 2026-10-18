@@ -164,6 +164,14 @@ def test_warmup_synthesizes_each_language():
     assert len(en.calls) == 1 and len(he.calls) == 1
 
 
+def _load_or_skip(factory, *args, **kwargs):
+    """Build a real model offline; skip (not error) when its HF files aren't cached."""
+    try:
+        return factory(*args, **kwargs)
+    except OSError as e:  # includes huggingface_hub LocalEntryNotFoundError
+        pytest.skip(f"model files not in local HF cache: {type(e).__name__}")
+
+
 @pytest.mark.slow
 def test_piper_real():
     pytest.importorskip("piper")
@@ -181,10 +189,7 @@ def test_mms_real():
     pytest.importorskip("torch")
     from mirror.tts import MmsHebrewTTS
 
-    try:
-        tts = MmsHebrewTTS("facebook/mms-tts-heb")
-    except OSError:
-        pytest.skip("MMS model not in HF cache")
+    tts = _load_or_skip(MmsHebrewTTS, "facebook/mms-tts-heb")
     audio, rate = tts.synth("שלום")
     assert len(audio) / rate > 0.2
 
@@ -198,7 +203,7 @@ def test_phonikud_real():
         pytest.skip("phonikud models missing")
     from mirror.tts import PhonikudHebrewTTS
 
-    tts = PhonikudHebrewTTS(str(PHONIKUD_MODEL), str(PHONIKUD_VOICE))
+    tts = _load_or_skip(PhonikudHebrewTTS, str(PHONIKUD_MODEL), str(PHONIKUD_VOICE))
     audio, rate = tts.synth("מראה מראה שעל הקיר, מי הכי יפה?")
     assert rate == 22050
     assert audio.dtype == np.float32 and audio.ndim == 1
@@ -216,7 +221,7 @@ def test_phonikud_alignments_real():
         pytest.skip("phonikud models missing")
     from mirror.tts import PhonikudHebrewTTS
 
-    tts = PhonikudHebrewTTS(str(PHONIKUD_MODEL), str(PHONIKUD_VOICE))
+    tts = _load_or_skip(PhonikudHebrewTTS, str(PHONIKUD_MODEL), str(PHONIKUD_VOICE))
     audio, sr, track = tts.synth_visemes("מראה מראה שעל הקיר, מי הכי יפה?")
     assert track is not None
     assert track.end == pytest.approx(len(audio) / sr)
@@ -607,7 +612,7 @@ def test_pocket_real():
         pytest.skip("pocket model missing")
     from mirror.tts import PocketTTS
 
-    tts = PocketTTS(str(POCKET_MODEL), voice="javert", g2p=FakeIpaG2P("ʃalˈom."))
+    tts = _load_or_skip(PocketTTS, str(POCKET_MODEL), voice="javert", g2p=FakeIpaG2P("ʃalˈom."))
     audio, sr, track = tts.synth_visemes("Mirror, mirror on the wall.", "en")
     assert sr == 24000 and len(audio) / sr > 1.0
     assert np.abs(audio).max() > 0.01
