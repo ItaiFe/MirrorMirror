@@ -109,11 +109,14 @@ if [ "$WITH_MMS" = 1 ]; then
     EXTRAS="$EXTRAS,mms"
 fi
 "$VENV/bin/pip" install -e "${REPO}[$EXTRAS]"
-# The RenikudPlus G2P declares Python >= 3.12 (JetPack 6 has 3.10) and onnxruntime
-# >= 1.24.2 (no cp310 wheel); it runs on 3.10 with onnxruntime 1.23. pyproject.toml
-# only pulls it in on >= 3.12, so install it here without those checks.
-"$VENV/bin/python" -c 'import renikud_onnx' 2>/dev/null ||
+# The RenikudPlus G2P declares Python >= 3.12 (JetPack 6 has 3.10); it runs on 3.10
+# with the onnxruntime==1.23.2 that pyproject.toml pins (the newest with a cp310 aarch64
+# wheel; renikud's own [cpu] extra would want >= 1.24.2). pyproject.toml only pulls it in
+# on >= 3.12, so install it here, pinned, without its own dependency checks.
+"$VENV/bin/pip" show renikud-plus 2>/dev/null | grep -qx 'Version: 0.5.0' ||
     "$VENV/bin/pip" install --no-deps --ignore-requires-python "renikud-plus==0.5.0"
+"$VENV/bin/python" -c 'import onnxruntime, sys; v = onnxruntime.__version__
+sys.exit(v != "1.23.2" and f"onnxruntime {v} installed, 1.23.2 expected")'
 
 step "4/8 models -> $MODELS"
 PYTHON="$VENV/bin/python" "$REPO/deploy/fetch_models.sh" "$MODELS"

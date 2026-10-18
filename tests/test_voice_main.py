@@ -22,15 +22,54 @@ def test_build_hebrew_tts_phonikud(monkeypatch):
     assert he.kwargs == {"g2p": None}  # the voice builds its own Phonikud G2P
 
 
+class G2PRecorder(Recorder):
+    def phonemize(self, text):
+        self.probed = text
+        return "ʃalˈom"
+
+
+def _renikud_cfg():
+    return TtsConfig(he_engine="phonikud", he_g2p="renikud", renikud_model="renikud.onnx",
+                     phonikud_model="g2p.onnx", phonikud_voice_he="voice.onnx")
+
+
 def test_build_hebrew_tts_renikud_g2p(monkeypatch):
     monkeypatch.setattr(mirror.tts, "PhonikudHebrewTTS", Recorder)
-    monkeypatch.setattr(mirror.tts, "RenikudG2P", Recorder)
-    cfg = TtsConfig(he_engine="phonikud", he_g2p="renikud", renikud_model="renikud.onnx",
-                    phonikud_voice_he="voice.onnx")
-    he = build_hebrew_tts(cfg)
+    monkeypatch.setattr(mirror.tts, "RenikudG2P", G2PRecorder)
+    he = build_hebrew_tts(_renikud_cfg())
     assert he.args[1:] == ("voice.onnx", None)
     g2p = he.kwargs["g2p"]
-    assert isinstance(g2p, Recorder) and g2p.args == ("renikud.onnx",)
+    assert isinstance(g2p, G2PRecorder) and g2p.args == ("renikud.onnx",)
+    assert g2p.probed  # loaded and tried at build time, not first at warmup
+
+
+class BrokenG2P:
+    def __init__(self, *args):
+        pass
+
+    def phonemize(self, text):
+        raise ImportError("No module named 'renikud_onnx'")
+
+
+def test_build_hebrew_tts_renikud_failure_falls_back_to_phonikud(monkeypatch, caplog):
+    monkeypatch.setattr(mirror.tts, "PhonikudHebrewTTS", Recorder)
+    monkeypatch.setattr(mirror.tts, "RenikudG2P", BrokenG2P)
+    with caplog.at_level("WARNING", logger="mirror.voice"):
+        he = build_hebrew_tts(_renikud_cfg())
+    assert he.args == ("g2p.onnx", "voice.onnx", None) and he.kwargs == {"g2p": None}
+    assert any("Phonikud" in r.getMessage() and r.levelname == "WARNING"
+               for r in caplog.records)
+
+
+def test_build_hebrew_tts_both_g2ps_fail_raises_clearly(monkeypatch):
+    def no_phonikud(*args, **kwargs):
+        raise FileNotFoundError("g2p.onnx")
+
+    monkeypatch.setattr(mirror.tts, "PhonikudHebrewTTS", no_phonikud)
+    monkeypatch.setattr(mirror.tts, "RenikudG2P", BrokenG2P)
+    with pytest.raises(RuntimeError, match="RenikudPlus.*Phonikud") as e:
+        build_hebrew_tts(_renikud_cfg())
+    assert isinstance(e.value.__cause__, FileNotFoundError)
 
 
 def test_build_hebrew_tts_unknown_g2p():

@@ -257,14 +257,30 @@ def build_hebrew_tts(tts_cfg: TtsConfig):
     from mirror import tts
 
     if tts_cfg.he_engine == "phonikud":
+        renikud_error = None
         if tts_cfg.he_g2p == "renikud":
             g2p = tts.RenikudG2P(tts_cfg.renikud_model)
+            try:
+                g2p.phonemize("שלום")  # load it now: a broken install falls back, not dies
+            except Exception as e:
+                log.warning("RenikudPlus G2P (%s) failed to load (%s: %s); "
+                            "falling back to Phonikud", tts_cfg.renikud_model,
+                            type(e).__name__, e)
+                g2p, renikud_error = None, e
         elif tts_cfg.he_g2p == "phonikud":
             g2p = None  # the voice builds Phonikud from phonikud_model
         else:
             raise ValueError(f"unknown tts.he_g2p {tts_cfg.he_g2p!r} (renikud | phonikud)")
-        return tts.PhonikudHebrewTTS(tts_cfg.phonikud_model, tts_cfg.phonikud_voice_he,
-                                     tts_cfg.phonikud_voice_config_he, g2p=g2p)
+        try:
+            return tts.PhonikudHebrewTTS(tts_cfg.phonikud_model, tts_cfg.phonikud_voice_he,
+                                         tts_cfg.phonikud_voice_config_he, g2p=g2p)
+        except Exception as e:
+            if renikud_error is None:
+                raise
+            raise RuntimeError(
+                f"no Hebrew G2P: RenikudPlus failed ({type(renikud_error).__name__}: "
+                f"{renikud_error}) and the Phonikud fallback failed too "
+                f"({type(e).__name__}: {e})") from e
     if tts_cfg.he_engine == "mms":
         return tts.MmsHebrewTTS(tts_cfg.mms_model_he)
     raise ValueError(f"unknown tts.he_engine {tts_cfg.he_engine!r} (phonikud | mms)")
