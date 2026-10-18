@@ -20,7 +20,11 @@ dependencies = [
 # Exact versions tested together (2026-10-17); setup_orin.sh installs once, offline after.
 hw = ["sounddevice==0.5.6", "pyserial==3.5", "onnxruntime"]
 # mirror/tts.py uses piper 1.8.0 internals (alignments, PiperConfig.from_dict): keep exact.
-tts = ["piper-tts[alignment]==1.8.0", "phonikud==0.4.1", "phonikud-onnx==1.0.6", "huggingface_hub"]
+# renikud-plus (the default Hebrew G2P) declares Python >= 3.12 and onnxruntime >= 1.24.2
+# but runs on 3.10 with onnxruntime 1.23 (tested): below 3.12 setup_orin.sh installs it
+# with --no-deps --ignore-requires-python; hebrew-num2words is its only other dependency.
+tts = ["piper-tts[alignment]==1.8.0", "phonikud==0.4.1", "phonikud-onnx==1.0.6", "huggingface_hub",
+       "renikud-plus[cpu]==0.5.0; python_version >= '3.12'", "hebrew-num2words==0.1.0"]
 # The MMS Hebrew fallback voice only (tts.he_engine = "mms"). On the Orin, install
 # NVIDIA's JetPack torch wheel first: deploy/setup_orin.sh --with-mms.
 mms = ["transformers", "torch"]

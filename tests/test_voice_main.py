@@ -8,16 +8,34 @@ from mirror.voice_main import build_hebrew_tts, open_output, resolve_repo_path, 
 
 
 class Recorder:
-    def __init__(self, *args):
+    def __init__(self, *args, **kwargs):
         self.args = args
+        self.kwargs = kwargs
 
 
 def test_build_hebrew_tts_phonikud(monkeypatch):
     monkeypatch.setattr(mirror.tts, "PhonikudHebrewTTS", Recorder)
-    cfg = TtsConfig(he_engine="phonikud", phonikud_model="g2p.onnx",
+    cfg = TtsConfig(he_engine="phonikud", he_g2p="phonikud", phonikud_model="g2p.onnx",
                     phonikud_voice_he="voice.onnx", phonikud_voice_config_he="voice.json")
     he = build_hebrew_tts(cfg)
     assert isinstance(he, Recorder) and he.args == ("g2p.onnx", "voice.onnx", "voice.json")
+    assert he.kwargs == {"g2p": None}  # the voice builds its own Phonikud G2P
+
+
+def test_build_hebrew_tts_renikud_g2p(monkeypatch):
+    monkeypatch.setattr(mirror.tts, "PhonikudHebrewTTS", Recorder)
+    monkeypatch.setattr(mirror.tts, "RenikudG2P", Recorder)
+    cfg = TtsConfig(he_engine="phonikud", he_g2p="renikud", renikud_model="renikud.onnx",
+                    phonikud_voice_he="voice.onnx")
+    he = build_hebrew_tts(cfg)
+    assert he.args[1:] == ("voice.onnx", None)
+    g2p = he.kwargs["g2p"]
+    assert isinstance(g2p, Recorder) and g2p.args == ("renikud.onnx",)
+
+
+def test_build_hebrew_tts_unknown_g2p():
+    with pytest.raises(ValueError, match="he_g2p"):
+        build_hebrew_tts(TtsConfig(he_engine="phonikud", he_g2p="espeak"))
 
 
 def test_build_hebrew_tts_mms(monkeypatch):

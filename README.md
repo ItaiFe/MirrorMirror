@@ -27,7 +27,9 @@ and the frame lights printed to the log.
 
 ```sh
 uv venv --python 3.11 .venv && uv pip install --python .venv -e '.[dev,hw,tts]'
-make models        # deploy/fetch_models.sh models (whisper small, Gemma 3 4B, Silero, Piper, Phonikud, MMS cache)
+# the RenikudPlus Hebrew G2P declares Python >= 3.12 but runs on 3.10/3.11:
+uv pip install --python .venv --no-deps --python-version 3.12 renikud-plus==0.5.0
+make models        # deploy/fetch_models.sh models (whisper small, Gemma 3 4B, Silero, Piper, Phonikud, RenikudPlus, MMS cache)
 make test
 make servers-mac   # just whisper-server :8081 + llama-server :8080 (Ctrl-C stops both)
 make dev           # servers in background (logs in /tmp/mirror-dev), wait for /health, then face + voice
@@ -39,7 +41,8 @@ Then say "Mirror, mirror on the wall, ..." or "מראה, מראה שעל הקי�
 - `make dev LLM_MODEL=models/other.gguf` swaps the LLM. The face window is 756x756 (252 x 3).
 - `mirror-voice --config config/mac.toml --wav FILE.wav` feeds a WAV through VAD and the
   conversation controller exactly like mic audio (then 1 s of silence), plays the reply and exits.
-- The Hebrew voice is Phonikud + Piper. For the old MMS fallback voice
+- The Hebrew voice is a G2P (RenikudPlus by default, `tts.he_g2p = "renikud"`; Phonikud
+  with `"phonikud"`) feeding the Phonikud Piper voice. For the old MMS fallback voice
   (`tts.he_engine = "mms"`) add the `mms` extra: `-e '.[dev,hw,tts,mms]'` (pulls in torch).
 - The oracle's background story is `config/oracle_world.md`; edit it freely, it is read at start.
 

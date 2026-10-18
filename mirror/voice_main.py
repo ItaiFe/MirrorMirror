@@ -253,12 +253,18 @@ def _lights_to_idle(lights) -> None:
 
 
 def build_hebrew_tts(tts_cfg: TtsConfig):
-    """The Hebrew engine named by tts.he_engine."""
+    """The Hebrew engine named by tts.he_engine (with the G2P named by tts.he_g2p)."""
     from mirror import tts
 
     if tts_cfg.he_engine == "phonikud":
+        if tts_cfg.he_g2p == "renikud":
+            g2p = tts.RenikudG2P(tts_cfg.renikud_model)
+        elif tts_cfg.he_g2p == "phonikud":
+            g2p = None  # the voice builds Phonikud from phonikud_model
+        else:
+            raise ValueError(f"unknown tts.he_g2p {tts_cfg.he_g2p!r} (renikud | phonikud)")
         return tts.PhonikudHebrewTTS(tts_cfg.phonikud_model, tts_cfg.phonikud_voice_he,
-                                     tts_cfg.phonikud_voice_config_he)
+                                     tts_cfg.phonikud_voice_config_he, g2p=g2p)
     if tts_cfg.he_engine == "mms":
         return tts.MmsHebrewTTS(tts_cfg.mms_model_he)
     raise ValueError(f"unknown tts.he_engine {tts_cfg.he_engine!r} (phonikud | mms)")
@@ -311,7 +317,7 @@ def run(cfg: Config, wav_path=None, config_path=None) -> int:
         llm = LlamaServerLLM(cfg.servers.llm_url, cfg.servers.timeout_s,
                              cfg.conversation.max_reply_sentences,
                              cfg.conversation.max_reply_chars, world=world)
-        log.info("loading TTS voices (Hebrew: %s)", cfg.tts.he_engine)
+        log.info("loading TTS voices (Hebrew: %s, G2P %s)", cfg.tts.he_engine, cfg.tts.he_g2p)
         en_tts = PiperTTS(cfg.tts.piper_voice_en)
         tts = TTSRouter(en_tts, build_hebrew_tts(cfg.tts))
         tts.warmup()

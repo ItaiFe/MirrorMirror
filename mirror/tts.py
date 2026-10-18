@@ -1,10 +1,11 @@
-"""Bilingual text-to-speech: Piper (English), Phonikud + Piper or Meta MMS (Hebrew),
-and a router."""
+"""Bilingual text-to-speech: Piper (English), a Hebrew Piper voice fed by a
+grapheme-to-phoneme stage (RenikudPlus or Phonikud) or Meta MMS (Hebrew), and a router."""
 from __future__ import annotations
 
 import json
 import logging
 import re
+import threading
 from typing import Protocol
 
 import numpy as np
@@ -142,25 +143,92 @@ def prepare_hebrew(text: str) -> str:
     return " ".join(text.split())
 
 
-class PhonikudHebrewTTS:
-    """Plain Hebrew text -> Phonikud (niqqud, stress) -> IPA -> Piper VITS voice (ONNX, CPU).
+class PhonikudG2P:
+    """Plain Hebrew text -> Phonikud (niqqud, stress) -> IPA.
 
     Phonikud loads its character tokenizer (dicta-il/dictabert-large-char-menaked)
     through the Hugging Face cache, so HF_HOME must point at a cache that has it
     (deploy/fetch_models.sh puts it in MODELS_DIR/hf).
     """
 
-    def __init__(self, phonikud_model: str, voice_model: str, voice_config: str | None = None):
+    def __init__(self, model_path: str):
         import onnxruntime  # lazy: heavy optional deps
         from phonikud import phonemize
         from phonikud_onnx import Phonikud
-        from piper.config import PiperConfig
+
+        self._phonemize = phonemize
+        self._diacritizer = Phonikud.from_session(
+            onnxruntime.InferenceSession(model_path, providers=["CPUExecutionProvider"]))
+
+    def phonemize(self, text: str) -> str:
+        return self._phonemize(self._diacritizer.add_diacritics(prepare_hebrew(text)))
+
+
+# What the Hebrew Piper voice was trained on: Phonikud's output inventory (its
+# consonants, a e i o u, the stress mark) and the punctuation Phonikud keeps.
+# RenikudPlus emits the same phonemes, with the same stress notation (ˈ before the
+# stressed vowel), but passes other punctuation, markup and Latin words through.
+HEBREW_VOICE_SYMBOLS = frozenset("abdefhijklmnopstuvwzɡʁʃʒʔχˈ") | frozenset(" ,.?!")
+
+# Filler interjections are sounds, not words: RenikudPlus would vowelize them
+# ("הממ" -> "hamamˈa"). Its force lexicon always wins where a token matches.
+RENIKUD_LEXICON = {"הממ": "hmm", "מממ": "mmm", "ממ": "mm", "אהה": "ʔahˈa"}
+
+_JOINER = re.compile(r"(?<=\S)[-\u05be](?=\S)")  # hyphen/maqaf inside a word
+_PAUSE = re.compile(r"[-\u05be\u2013\u2014\u2026:;]")  # dashes, ellipsis, : ; -> a comma
+_MARKUP = str.maketrans("", "", "*()[]{}\"'«»")
+_SPACE_BEFORE_PUNCT = re.compile(r"\s+(?=[,.?!])")
+_COMMA_BEFORE_PUNCT = re.compile(r",+(?=[,.?!])")
+
+
+def map_renikud_ipa(ipa: str) -> str:
+    """RenikudPlus IPA -> only symbols the Hebrew voice was trained on: pauses become
+    commas, a hyphen inside a word joins it, markup goes, and a token with any other
+    symbol left (a Latin word passed through) is dropped."""
+    ipa = _PAUSE.sub(",", _JOINER.sub("", ipa))
+    words = [w.translate(_MARKUP) for w in ipa.split()]
+    out = " ".join(w for w in words if w and set(w) <= HEBREW_VOICE_SYMBOLS)
+    out = _COMMA_BEFORE_PUNCT.sub("", _SPACE_BEFORE_PUNCT.sub("", out))
+    return out.lstrip(" ,.?!")
+
+
+class RenikudG2P:
+    """Plain Hebrew text -> IPA with RenikudPlus (ONNX, CPU), speaker-gender aware
+    (0 unknown, 1 male, 2 female; the oracle is masculine). The model loads on the
+    first sentence, once; it is always given a local path and no rescoring
+    datastore, so nothing is fetched at runtime."""
+
+    def __init__(self, model_path: str, speaker: int = 1):
+        self._model_path = model_path
+        self._speaker = speaker
+        self._g2p = None
+        self._lock = threading.Lock()
+
+    def _load(self):
+        with self._lock:
+            if self._g2p is None:
+                from renikud_onnx import G2P  # lazy: heavy optional dep
+
+                self._g2p = G2P(self._model_path, datastore=None, lexicon=RENIKUD_LEXICON)
+        return self._g2p
+
+    def phonemize(self, text: str) -> str:
+        g2p = self._g2p or self._load()
+        # Numbers, hyphenated prefixes ("ו-25") and maqaf are handled by RenikudPlus.
+        return map_renikud_ipa(g2p.phonemize(" ".join(text.split()), speaker=self._speaker))
+
+
+class PhonikudHebrewTTS:
+    """Plain Hebrew text -> G2P (Phonikud by default, or the given one, e.g.
+    RenikudG2P) -> IPA -> the Phonikud Piper VITS voice (ONNX, CPU)."""
+
+    def __init__(self, phonikud_model: str, voice_model: str, voice_config: str | None = None,
+                 g2p=None):
+        from piper.config import PiperConfig  # lazy: heavy optional deps
         from piper.voice import PiperVoice
 
         cpu = ["CPUExecutionProvider"]  # keep the GPU free for the LLM
-        self._phonemize = phonemize
-        self._diacritizer = Phonikud.from_session(
-            onnxruntime.InferenceSession(phonikud_model, providers=cpu))
+        self._g2p = g2p if g2p is not None else PhonikudG2P(phonikud_model)
         with open(voice_config or f"{voice_model}.json", encoding="utf-8") as f:
             config = json.load(f)
         # The voice takes raw IPA characters ("phoneme_type": "raw"), which piper's
@@ -171,11 +239,11 @@ class PhonikudHebrewTTS:
                                  config=PiperConfig.from_dict(config))
         self._known = set(self._voice.config.phoneme_id_map)
         self._rate = int(self._voice.config.sample_rate)
-        self._tracks = _Tracks(f"phonikud {voice_model}")
+        self._tracks = _Tracks(f"hebrew voice {voice_model}")
 
     def phonemes(self, text: str) -> str:
         """IPA for plain Hebrew text (characters the voice doesn't know are dropped)."""
-        ipa = self._phonemize(self._diacritizer.add_diacritics(prepare_hebrew(text)))
+        ipa = self._g2p.phonemize(text)
         return "".join(c for c in ipa if c in self._known).strip()
 
     def synth(self, text: str) -> tuple[np.ndarray, int]:

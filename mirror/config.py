@@ -28,7 +28,9 @@ class ServersConfig:
 @dataclass
 class TtsConfig:
     piper_voice_en: str = "models/en_US-lessac-medium.onnx"
-    he_engine: str = "phonikud"  # "phonikud" | "mms"
+    he_engine: str = "phonikud"  # "phonikud" (G2P + Phonikud Piper voice) | "mms"
+    he_g2p: str = "renikud"  # the voice's text->IPA stage: "renikud" | "phonikud"
+    renikud_model: str = "models/renikud-plus.int8.onnx"
     phonikud_model: str = "models/phonikud-1.0.int8.onnx"
     phonikud_voice_he: str = "models/phonikud-tts-he.onnx"
     phonikud_voice_config_he: Optional[str] = None  # default: <phonikud_voice_he>.json

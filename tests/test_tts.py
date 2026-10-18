@@ -232,7 +232,7 @@ def test_phonikud_alignments_real():
 
 def _stub_phonikud(ipa):
     """A PhonikudHebrewTTS with its models replaced by stubs (no model files)."""
-    from mirror.tts import PhonikudHebrewTTS, _Tracks
+    from mirror.tts import PhonikudG2P, PhonikudHebrewTTS, _Tracks
 
     tts = object.__new__(PhonikudHebrewTTS)
     calls = {}
@@ -255,8 +255,9 @@ def _stub_phonikud(ipa):
             calls["ids"] = ids
             return np.full(100 * len(ids), 16384, np.int16)
 
-    tts._phonemize = lambda text: calls.setdefault("phonemize", text) and ipa
-    tts._diacritizer = Diacritizer()
+    tts._g2p = PhonikudG2P.__new__(PhonikudG2P)
+    tts._g2p._phonemize = lambda text: calls.setdefault("phonemize", text) and ipa
+    tts._g2p._diacritizer = Diacritizer()
     tts._voice = Voice()
     tts._known = set(Voice.config.phoneme_id_map)
     tts._rate = 22050
@@ -296,3 +297,109 @@ def test_mms_empty_text_returns_empty_audio():
     tts._tokenizer = boom
     audio, sr = tts.synth("   ")
     assert len(audio) == 0 and audio.dtype == np.float32 and sr == 16000
+
+
+# --- RenikudPlus G2P ---------------------------------------------------------------
+
+RENIKUD_MODEL = Path("models/renikud-plus.int8.onnx")
+
+
+def _fake_renikud(monkeypatch, ipa="ʃalˈom"):
+    """Install a fake `renikud_onnx` whose G2P records how it is built and called."""
+    record = {"inits": [], "calls": []}
+
+    class G2P:
+        def __init__(self, model_path=None, **kwargs):
+            record["inits"].append((model_path, kwargs))
+
+        def phonemize(self, text, speaker=0, **kwargs):
+            record["calls"].append((text, speaker))
+            return ipa
+
+    module = types.ModuleType("renikud_onnx")
+    module.G2P = G2P
+    monkeypatch.setitem(sys.modules, "renikud_onnx", module)
+    return record
+
+
+def test_renikud_g2p_loads_lazily_once_offline(monkeypatch):
+    record = _fake_renikud(monkeypatch)
+    from mirror.tts import RenikudG2P
+
+    g2p = RenikudG2P("models/r.onnx")
+    assert record["inits"] == []  # nothing loads until the first sentence
+    assert g2p.phonemize("שלום") == "ʃalˈom"
+    assert g2p.phonemize("  שלום\n עולם ") == "ʃalˈom"
+    (path, kwargs), = record["inits"]
+    # an explicit model path and no datastore: nothing is ever fetched at runtime
+    assert path == "models/r.onnx" and kwargs["datastore"] is None
+    # the oracle is masculine; whitespace is collapsed before the model sees it
+    assert record["calls"] == [("שלום", 1), ("שלום עולם", 1)]
+
+
+def test_renikud_g2p_speaker_override(monkeypatch):
+    record = _fake_renikud(monkeypatch)
+    from mirror.tts import RenikudG2P
+
+    RenikudG2P("m.onnx", speaker=2).phonemize("שלום")
+    assert record["calls"] == [("שלום", 2)]
+
+
+def test_renikud_g2p_reads_interjections_as_sounds(monkeypatch):
+    record = _fake_renikud(monkeypatch)
+    from mirror.tts import RenikudG2P
+
+    RenikudG2P("m.onnx").phonemize("הממ")
+    lexicon = record["inits"][0][1]["lexicon"]
+    # the fillers' "hmm"/"mmm" are sounds, not words to vowelize ("hamamˈa")
+    assert lexicon["הממ"] == "hmm" and lexicon["מממ"] == "mmm"
+
+
+@pytest.mark.parametrize("raw, mapped", [
+    ("mmm… zˈo", "mmm, zˈo"),                     # ellipsis: a pause
+    ("talˈuj balˈev – bivχiʁˈa", "talˈuj balˈev, bivχiʁˈa"),  # dashes: a pause
+    ("lahovˈe - ʔˈaχ", "lahovˈe, ʔˈaχ"),
+    ("ziχʁˈu: χˈut; ʔadˈom", "ziχʁˈu, χˈut, ʔadˈom"),  # colon/semicolon: a pause
+    ("be־ʃalˈoʃ ve-ʔaχˈat", "beʃalˈoʃ veʔaχˈat"),      # maqaf/hyphen inside a word: joined
+    ("kmˈo *meχajˈeχ* (Hi) \"tʃuvˈa\"", "kmˈo meχajˈeχ tʃuvˈa"),  # markup, Latin dropped
+    ("mˈa?! tˈov.", "mˈa?! tˈov."),
+    ("tʃuvˈa:.", "tʃuvˈa."),                       # no doubled punctuation
+])
+def test_renikud_g2p_maps_symbols_to_the_voice_inventory(monkeypatch, raw, mapped):
+    _fake_renikud(monkeypatch, ipa=raw)
+    from mirror.tts import RenikudG2P
+
+    assert RenikudG2P("m.onnx").phonemize("x") == mapped
+
+
+def test_hebrew_voice_uses_the_given_g2p(monkeypatch):
+    tts, calls = _stub_phonikud("unused")
+
+    class G2P:
+        def phonemize(self, text):
+            calls["g2p"] = text
+            return "ba?"
+
+    tts._g2p = G2P()
+    assert tts.phonemes("שלום") == "ba"
+    assert calls["g2p"] == "שלום" and "diacritize" not in calls
+
+
+@pytest.mark.slow
+def test_renikud_real_ipa_uses_only_voice_symbols():
+    pytest.importorskip("renikud_onnx")
+    if not RENIKUD_MODEL.exists():
+        pytest.skip("renikud model missing")
+    import json
+
+    from mirror.persona import FALLBACK, FILLERS
+    from mirror.tts import HEBREW_VOICE_SYMBOLS, RenikudG2P
+
+    g2p = RenikudG2P(str(RENIKUD_MODEL))
+    voice_symbols = set(json.loads(Path("models/phonikud-tts-he.onnx.json").read_text())
+                        ["phoneme_id_map"]) if PHONIKUD_VOICE.exists() else set()
+    for line in [*FILLERS["he"], FALLBACK["he"], "ראיתי 15 כוכבים, ב־3 בלילה – *מחייך*."]:
+        ipa = g2p.phonemize(line)
+        assert ipa and "ˈ" in ipa, line
+        assert set(ipa) <= HEBREW_VOICE_SYMBOLS, (line, ipa)
+        assert not voice_symbols or set(ipa) <= voice_symbols

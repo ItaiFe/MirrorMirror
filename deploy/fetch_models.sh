@@ -42,6 +42,10 @@ PHONIKUD_TTS="$HF/Phonikud/phonikud-tts-checkpoints/resolve/ff64ba389a3833c49a85
 fetch "$PHONIKUD_G2P/phonikud-1.0.int8.onnx" phonikud-1.0.int8.onnx
 fetch "$PHONIKUD_TTS/model.onnx" phonikud-tts-he.onnx
 fetch "$PHONIKUD_TTS/model.config.json" phonikud-tts-he.onnx.json
+# RenikudPlus G2P (Apache-2.0), the int8 model, pinned revision. It is loaded from
+# this path with no rescoring datastore, so it never touches the network at runtime.
+RENIKUD="$HF/notmax123/RenikudPlus/resolve/679c56ca449d41873fb8ff7711ddf7563d28198f"
+fetch "$RENIKUD/model_int8.onnx" renikud-plus.int8.onnx
 
 # Hugging Face cache: Phonikud's tokenizer (loaded by name, so on the main ref)
 # and the MMS Hebrew fallback voice.
