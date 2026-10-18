@@ -29,21 +29,6 @@ fetch() {  # fetch URL FILENAME
 
 # Stock multilingual small: the fallback STT model (STT_MODEL=ggml-small.bin).
 fetch "$HF/ggerganov/whisper.cpp/resolve/main/ggml-small.bin" ggml-small.bin
-# The default STT model: ivrit-ai's Hebrew Whisper large-v3-turbo (Apache-2.0), the
-# official ggml export (f16 only) at a pinned revision, quantized here to q5_0.
-# The f16 is deleted once the q5_0 exists.
-IVRIT="$HF/ivrit-ai/whisper-large-v3-turbo-ggml/resolve/2130c78e4a9cb4914cc4df91a1c3031407789705"
-if [ -s "$DIR/ivrit-turbo-q5_0.bin" ]; then
-    echo "skip  ivrit-turbo-q5_0.bin (exists)"
-else
-    command -v "$WHISPER_QUANTIZE" >/dev/null \
-        || { echo "$WHISPER_QUANTIZE not found (brew install whisper-cpp, or set WHISPER_QUANTIZE)" >&2; exit 1; }
-    fetch "$IVRIT/ggml-model.bin" ivrit-turbo-f16.bin
-    echo "quantize ivrit-turbo-f16.bin -> ivrit-turbo-q5_0.bin"
-    "$WHISPER_QUANTIZE" "$DIR/ivrit-turbo-f16.bin" "$DIR/ivrit-turbo-q5_0.bin.part" q5_0
-    mv "$DIR/ivrit-turbo-q5_0.bin.part" "$DIR/ivrit-turbo-q5_0.bin"
-    rm -f "$DIR/ivrit-turbo-f16.bin"
-fi
 fetch "$HF/ggml-org/gemma-3-4b-it-GGUF/resolve/main/gemma-3-4b-it-Q4_K_M.gguf" \
     gemma-3-4b-it-Q4_K_M.gguf
 # Silero VAD pinned to the v5.1.2 tag (master moves).
@@ -72,4 +57,24 @@ HF_HOME="$DIR/hf" "$PYTHON" -c "
 from huggingface_hub import snapshot_download
 snapshot_download('dicta-il/dictabert-large-char-menaked', allow_patterns=['tokenizer.json'])
 snapshot_download('facebook/mms-tts-heb', ignore_patterns=['*.bin'])"
+
+# The default STT model: ivrit-ai's Hebrew Whisper large-v3-turbo (Apache-2.0), the
+# official ggml export (f16 only) at a pinned revision, quantized here to q5_0.
+# The f16 is deleted once the q5_0 exists. Last, so a missing whisper-quantize
+# does not stop the other downloads.
+IVRIT="$HF/ivrit-ai/whisper-large-v3-turbo-ggml/resolve/2130c78e4a9cb4914cc4df91a1c3031407789705"
+if [ -s "$DIR/ivrit-turbo-q5_0.bin" ]; then
+    echo "skip  ivrit-turbo-q5_0.bin (exists)"
+elif ! command -v "$WHISPER_QUANTIZE" >/dev/null; then
+    echo "ERROR: $WHISPER_QUANTIZE not found, so ivrit-turbo-q5_0.bin (the default STT model)" >&2
+    echo "       was not made; everything else is in $DIR. Install it (brew install whisper-cpp)" >&2
+    echo "       or set WHISPER_QUANTIZE, then re-run this script." >&2
+    exit 1
+else
+    fetch "$IVRIT/ggml-model.bin" ivrit-turbo-f16.bin
+    echo "quantize ivrit-turbo-f16.bin -> ivrit-turbo-q5_0.bin"
+    "$WHISPER_QUANTIZE" "$DIR/ivrit-turbo-f16.bin" "$DIR/ivrit-turbo-q5_0.bin.part" q5_0
+    mv "$DIR/ivrit-turbo-q5_0.bin.part" "$DIR/ivrit-turbo-q5_0.bin"
+    rm -f "$DIR/ivrit-turbo-f16.bin"
+fi
 echo "done"

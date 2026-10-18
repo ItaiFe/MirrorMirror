@@ -10,6 +10,8 @@ _MIRROR_THRESHOLD = 0.7
 _HEBREW_VARIANTS = {"מראה", "מראא", "מרא", "מירא"}
 # English "mirror" transliterated into Hebrew letters by the Hebrew fine-tune.
 _TRANSLITERATED_MIRROR = {"מיר", "מירור", "מירר"}
+# Repeats after the first two wake tokens are stripped only on these exact spellings.
+_REPEAT_WORDS = {"mirror", "mirrors"} | _TRANSLITERATED_MIRROR | _HEBREW_VARIANTS
 _TAILS = (("on", "the", "wall"), ("שעל", "הקיר"), ("על", "הקיר"))
 _HALLUCINATIONS = {"thank you", "thanks for watching", "you", "תודה", "תודה רבה", "תודה שצפיתם"}
 _TAG_RE = re.compile(r"^\s*(\[[^\]]*\]|\([^)]*\))\s*$")
@@ -53,7 +55,9 @@ def match_wake(text: str) -> "WakeMatch | None":
     if len(tokens) < 2 or not (_is_wake_word(tokens[0]) and _is_wake_word(tokens[1])):
         return None
     rest = tokens[2:]
-    while rest and _is_wake_word(rest[0]):  # ivrit-ai writes "mirror" up to 5 times
+    # ivrit-ai writes "mirror" up to 5 times. Only exact spellings count as repeats,
+    # so a fuzzy near-miss ("error", "מורה") stays as the question's first word.
+    while rest and rest[0] in _REPEAT_WORDS:
         rest = rest[1:]
     for tail in _TAILS:
         n = len(tail)

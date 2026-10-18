@@ -21,6 +21,12 @@ from mirror.wake import is_hallucination, match_wake
     ("mirror mirror mirror mirror will i find love", "will i find love"),
     ("Mirror mirror mirror mirror  mirror  around the wall, who", "around the wall who"),
     ("מראה מראה מראה מראה האם אמצא אהבה", "האם אמצא אהבה"),
+    # only strong matches count as repeats: a fuzzy near-miss is a real first word
+    ("mirror mirror, error codes?", "error codes"),
+    ("mirror mirror minor key", "minor key"),
+    ("מראה מראה מורה אמרה לי", "מורה אמרה לי"),
+    ("מראה מראה מראש", "מראש"),
+    ("מראה מראה מירה", "מירה"),
 ])
 def test_matches(text, rem):
     assert match_wake(text).remainder == rem
