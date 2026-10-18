@@ -279,6 +279,26 @@ def test_clean_strips_copied_answer_label():
         assert list(LlamaServerLLM("http://x", 5).reply_stream([], "hi", "he")) == ["שאלו שוב."]
 
 
+@pytest.mark.parametrize("label", [
+    "האורקל:", "אורקל :", "המראה -", "תשובה -", "Oracle:", "ORACLE -", "oracle :",
+    "Mirror:", "mirror -", "answer-",
+])
+def test_clean_strips_speaker_labels(label):
+    """A reply opening with a speaker label ("האורקל:", "Oracle -") is not spoken."""
+    assert trim_reply(f"{label} שאלו את הרוח.", 3, 300) == "שאלו את הרוח."
+    assert trim_reply(f"{label}The stars know.", 3, 300) == "The stars know."
+    with patch("mirror.llm.requests.post",
+               return_value=_sse(label, " שאלו את הרוח. ", "Then go.")):
+        out = list(LlamaServerLLM("http://x", 5).reply_stream([], "hi", "he"))
+    assert out == ["שאלו את הרוח.", "Then go."]
+
+
+def test_clean_keeps_label_words_inside_a_sentence():
+    assert trim_reply("Mirror, mirror on the wall: look.", 3, 300) == \
+        "Mirror, mirror on the wall: look."
+    assert trim_reply("המראה רואה הכל.", 3, 300) == "המראה רואה הכל."
+
+
 # --- Hebrew few-shot examples ------------------------------------------------------
 
 def test_hebrew_prompt_has_plural_examples_before_world():

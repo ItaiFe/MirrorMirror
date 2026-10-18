@@ -17,8 +17,11 @@ from mirror.persona import system_prompt
 log = logging.getLogger("mirror.llm")
 
 _STAGE_DIRECTIONS = re.compile(r"\*[^*]*\*|\[[^\]]*\]|\([^)]*\)")
-# A reply that copies the few-shot format ("תשובה: ...", "Answer: ...")
-_ANSWER_LABEL = re.compile(r"^\s*(?:תשובה|answer)\s*:\s*", re.IGNORECASE)
+# A reply that opens with a label: the few-shot format ("תשובה: ...", "Answer - ...")
+# or a speaker name ("האורקל: ...", "Oracle: ...", "Mirror - ...")
+_ANSWER_LABEL = re.compile(
+    r"^\s*(?:תשובה|answer|האורקל|אורקל|oracle|המראה|mirror)\s*[:\-–—]\s*",
+    re.IGNORECASE)
 _STRAY_MARKS = re.compile(r"[*\[\]()]")
 _SENTENCE_SPLIT = re.compile(r"(?<=[.!?…])\s+")
 _JOINERS = {"‍", "︎", "️"}  # ZWJ and variation selectors
