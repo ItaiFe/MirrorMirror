@@ -76,7 +76,7 @@ class SpriteFace:
         self._mouth = 0.0
         # sprung weights (warp fields and expression overlays)
         self._w: Dict[str, float] = {"gaze_x": 0.0, "gaze_y": 0.0, "brows": 0.0,
-                                     "smirk": 0.0, "squint": 0.0}
+                                     "smirk": 0.0}
         self._wander = (0.0, 0.0)
         self._next_wander = self.rng.uniform(*GAZE_WANDER_S)
         self.auto_blink = True  # random blinks every BLINK_GAP_S; blink() works either way
@@ -110,7 +110,9 @@ class SpriteFace:
             gx, gy = GAZE_WANDER_RANGE
             self._wander = (self.rng.uniform(-gx, gx), self.rng.uniform(-gy, gy))
             self._next_wander = t + self.rng.uniform(*GAZE_WANDER_S)
-        if state is State.IDLE and t >= self._next_smirk:
+        if state is not State.IDLE:
+            self._next_smirk = max(self._next_smirk, t + self.rng.uniform(*SMIRK_GAP_S))
+        elif t >= self._next_smirk:
             self._smirk_until = t + SMIRK_HOLD_S
             self._next_smirk = t + SMIRK_HOLD_S + self.rng.uniform(*SMIRK_GAP_S)
 
@@ -125,7 +127,6 @@ class SpriteFace:
             "gaze_y": gaze[1],
             "brows": BROWS.get(state, 0.0),
             "smirk": 1.0 if state is State.IDLE and t < self._smirk_until else 0.0,
-            "squint": 1.0 if state is State.THINKING else 0.0,
         }
         k = 1.0 - math.exp(-dt / SPRING_TAU_S)
         for name, goal in target.items():
@@ -134,6 +135,7 @@ class SpriteFace:
         self._update_mouth(viseme)
 
     def _update_mouth(self, viseme: str) -> None:
+        # intentional hysteresis: wide above WIDE_ABOVE, back to mild only below MILD_BELOW
         wide = self._mouth > WIDE_ABOVE or (self._wide and self._mouth >= MILD_BELOW)
         if viseme == self._viseme and wide == self._wide:
             # unchanged shape and width: keep the patch; a running crossfade advances
@@ -169,6 +171,10 @@ class SpriteFace:
 
     def _fade_weight(self) -> float:
         return min(1.0, self._fade_step / (CROSSFADE_FRAMES + 1))
+
+    @property
+    def eye_name(self) -> str:
+        return self._eye_name()
 
     def _eye_name(self) -> str:
         if self._blink_at >= 0.0:
@@ -206,7 +212,7 @@ class SpriteFace:
         bank = self.bank
         img = self._base()
 
-        for name in ("smirk", "squint"):
+        for name in ("smirk",):  # squint is the eye patch (_eye_name), not a whole-face overlay
             w = self._w[name]
             expr = bank.expressions.get(name)
             if expr is not None and w > 0.01:
@@ -224,6 +230,7 @@ class SpriteFace:
             self._blend(img, patch, *bank.mouth_box[:2])
 
         weights = {
+            # the jaw is not sprung: it follows the already-smoothed mouth (app.step_mouth)
             "jaw": min(JAW_MAX, self._mouth * JAW_SCALE) * self._jaw_factor(),
             "breathe": 0.5 + 0.5 * math.sin(2.0 * math.pi * self._t / BREATHE_PERIOD_S),
             "gaze_x": self._w["gaze_x"],

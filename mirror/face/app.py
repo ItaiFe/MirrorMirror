@@ -17,7 +17,7 @@ import numpy as np
 import pygame
 
 from mirror.bus import FaceBus
-from mirror.config import Config, load_config
+from mirror.config import Config, load_config, resolve_repo_path
 from mirror.face.draw import draw_face
 from mirror.states import State
 
@@ -46,14 +46,6 @@ def blink_amount(since_blink_start: float) -> float:
     return 1.0 - abs(2.0 * u - 1.0)
 
 
-def repo_path(path: str, config_path: str) -> str:
-    """A relative config path resolved against the repo root (the parent of the
-    config file's directory), like conversation.world_file."""
-    if os.path.isabs(path):
-        return path
-    return os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(config_path))), path)
-
-
 def make_sprite_face(cfg: Config, config_path: str):
     """The SpriteFace for face.renderer = "sprite", None for "procedural"."""
     renderer = cfg.face.renderer
@@ -64,7 +56,7 @@ def make_sprite_face(cfg: Config, config_path: str):
     from mirror.face.bank import load_bank
     from mirror.face.sprite import SpriteFace
 
-    bank_dir = repo_path(cfg.face.bank, config_path)
+    bank_dir = resolve_repo_path(cfg.face.bank, config_path)
     log.info("face bank %s", bank_dir)
     return SpriteFace(load_bank(bank_dir))
 

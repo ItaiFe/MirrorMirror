@@ -21,7 +21,7 @@ import numpy as np
 
 from mirror.audio import CHUNK, Mic, Player, find_device
 from mirror.bus import FaceBus
-from mirror.config import Config, TtsConfig, load_config
+from mirror.config import Config, TtsConfig, load_config, resolve_repo_path
 from mirror.conversation import Controller
 from mirror.fillers import FillerBank
 from mirror.lights import LogLights, WledSerial
@@ -202,15 +202,6 @@ def warm_llm(llm) -> None:
             llm.warm(lang)
         except LLMError as e:
             log.warning("llm warmup (%s) failed: %s", lang, e)
-
-
-def resolve_repo_path(path: str, config_path) -> str:
-    """A relative path from the config, resolved against the repo root (the parent
-    of the config file's directory); against the working directory without one."""
-    if os.path.isabs(path) or config_path is None:
-        return path
-    repo = os.path.dirname(os.path.dirname(os.path.abspath(config_path)))
-    return os.path.join(repo, path)
 
 
 def run(cfg: Config, wav_path=None, config_path=None) -> int:

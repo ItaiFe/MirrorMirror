@@ -112,3 +112,11 @@ def test_render_under_5ms(bank):
         face.render()
         times.append(time.perf_counter() - t0)
     assert statistics.median(times) < 0.005
+
+
+def test_smirk_rescheduled_while_not_idle(bank):
+    f = SpriteFace(bank, random.Random(3))
+    f.auto_blink = False
+    for _ in range(600):  # 20 s of conversation at 30 fps
+        f.update(1 / 30, State.SPEAKING, 0.0, "X")
+    assert f._next_smirk > f._t + 15.0

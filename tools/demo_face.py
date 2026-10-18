@@ -28,9 +28,9 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from mirror.audio import mouth_envelope  # noqa: E402
-from mirror.config import load_config  # noqa: E402
+from mirror.config import load_config, resolve_repo_path  # noqa: E402
 from mirror.conversation import HOP_S, LEAD_S  # noqa: E402
-from mirror.face.app import FPS, repo_path, step_mouth  # noqa: E402
+from mirror.face.app import FPS, step_mouth  # noqa: E402
 from mirror.face.bank import load_bank  # noqa: E402
 from mirror.face.sprite import SpriteFace  # noqa: E402
 from mirror.states import State  # noqa: E402
@@ -93,7 +93,7 @@ def render_demo(bank, samples, sr, track):
         speaking = state is State.SPEAKING
         mouth = step_mouth(mouth, target if speaking else 0.0, dt)
         face.update(dt, state, mouth, viseme if speaking else "X")
-        yield face.render(), viseme, mouth, face._eye_name()
+        yield face.render(), viseme, mouth, face.eye_name
 
 
 def main():
@@ -106,7 +106,7 @@ def main():
     args = ap.parse_args()
 
     cfg = load_config(args.config)
-    bank = load_bank(args.bank or repo_path(cfg.face.bank, args.config))
+    bank = load_bank(args.bank or resolve_repo_path(cfg.face.bank, args.config))
     tts = make_tts(cfg)
     os.makedirs(args.out_dir, exist_ok=True)
     ffmpeg = shutil.which("ffmpeg")

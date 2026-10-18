@@ -1,3 +1,4 @@
+import os
 from dataclasses import MISSING, dataclass, field, fields
 from typing import Optional
 
@@ -83,3 +84,12 @@ def load_config(path: str) -> Config:
             continue
         kwargs[fld.name] = fld.default_factory(**raw.get(fld.name, {}))
     return Config(**kwargs)
+
+
+def resolve_repo_path(path: str, config_path) -> str:
+    """A relative path from the config, resolved against the repo root (the parent
+    of the config file's directory); against the working directory without one."""
+    if os.path.isabs(path) or config_path is None:
+        return path
+    repo = os.path.dirname(os.path.dirname(os.path.abspath(config_path)))
+    return os.path.join(repo, path)
