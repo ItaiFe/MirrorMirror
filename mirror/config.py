@@ -13,6 +13,9 @@ class AudioConfig:
     input_device: Optional[str] = None
     output_device: Optional[str] = None
     sample_rate: int = 16000
+    # several devices match input_device/output_device: prefer one that converts
+    # formats (ALSA plughw, PulseAudio/PipeWire, "default") over a raw hw: device
+    prefer_alsa_plug: bool = True
 
 
 @dataclass

@@ -5,6 +5,7 @@ models_dir = "/home/mirror/mirror-models"   # silero_vad.onnx + Hugging Face cac
 input_device = "XVF3800"    # substring match on device name
 output_device = "XVF3800"
 sample_rate = 16000
+prefer_alsa_plug = true     # several matches: prefer plughw/pulse/default over raw hw:
 
 [servers]
 stt_url = "http://127.0.0.1:8081"

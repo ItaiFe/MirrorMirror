@@ -14,7 +14,7 @@ from typing import Callable
 import numpy as np
 
 from mirror.config import ConversationConfig
-from mirror.llm import LLMError
+from mirror.llm import LLMError, server_unreachable
 from mirror.persona import FALLBACK, SYSTEM_PROMPT
 from mirror.states import State
 from mirror.stt import STTError
@@ -168,6 +168,11 @@ class Controller:
             except LLMError as e:  # nothing to say: no sentence, or not in time
                 cancel.set()
                 log.warning("llm failed: %s", e)
+                if server_unreachable(e):
+                    # llama-server is down or restarting: its slots will come back
+                    # cold, so re-warm both at the next idle ticks
+                    for slot_lang in self._last_llm:
+                        self.mark_unwarmed(slot_lang)
                 self._speak(FALLBACK[lang], lang)
                 self._go_idle()
                 return

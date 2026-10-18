@@ -35,6 +35,12 @@ class LLMError(Exception):
     """Raised when the llama-server request fails or returns an empty reply."""
 
 
+def server_unreachable(e: BaseException) -> bool:
+    """True if the LLMError came from a failed connection (llama-server down or
+    restarting, so its prompt caches are gone)."""
+    return isinstance(e.__cause__, requests.exceptions.ConnectionError)
+
+
 def _strip_emoji(text: str) -> str:
     return "".join(
         ch for ch in text

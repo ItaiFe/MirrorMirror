@@ -68,11 +68,13 @@ class WledSerial:
             self._last_open_attempt = now
             import serial  # lazy: hardware dep
 
-            self._serial = serial.Serial(self._port, self._baud, timeout=1)
+            # write_timeout: a wedged ESP32 must not block the controller thread; a
+            # SerialTimeoutException then takes the close-and-retry path below
+            self._serial = serial.Serial(self._port, self._baud, timeout=1, write_timeout=1)
         try:
             self._serial.write(data)
             self._serial.flush()
-        except Exception:
+        except Exception:  # incl. serial.SerialTimeoutException
             try:
                 self._serial.close()
             except Exception:

@@ -19,7 +19,7 @@ import wave
 
 import numpy as np
 
-from mirror.audio import CHUNK, Mic, Player, find_device
+from mirror.audio import CHUNK, Mic, MicStalled, Player, find_device
 from mirror.bus import FaceBus
 from mirror.config import Config, TtsConfig, load_config, resolve_repo_path
 from mirror.conversation import Controller
@@ -35,6 +35,9 @@ log = logging.getLogger("mirror.voice")
 
 TICK_S = 0.1
 WAV_TAIL_SILENCE_S = 1.0
+SEGMENTS_MAX = 3  # queued utterances; under constant noise the oldest are dropped
+MIC_MAX_FAILURES = 3  # consecutive mic stalls/open failures before giving up
+MIC_RETRY_S = 1.0  # pause before reopening a failed mic
 _ANSWERING = (State.THINKING, State.SPEAKING)
 
 
@@ -153,7 +156,55 @@ def audio_loop(source, segmenter: Segmenter, vad: SileroVad, gate: AnswerGate,
             vad.reset()
             deaf = False
         for seg in segmenter.feed(chunk):
-            segments.put(seg)
+            _put_dropping_oldest(segments, seg)
+
+
+def _put_dropping_oldest(q: "queue.Queue", item) -> None:
+    """Queue item; if q is full, drop its oldest entry first (never block the mic)."""
+    while True:
+        try:
+            q.put_nowait(item)
+            return
+        except queue.Full:
+            try:
+                q.get_nowait()
+                log.info("segment backlog: dropped the oldest segment")
+            except queue.Empty:
+                pass
+
+
+def audio_worker(open_source, segmenter: Segmenter, vad: SileroVad, gate: AnswerGate,
+                 segments: "queue.Queue", stop: threading.Event, failed: threading.Event,
+                 max_failures: int = MIC_MAX_FAILURES, retry_s: float = MIC_RETRY_S) -> None:
+    """Run audio_loop on open_source(), reopening it when the mic stalls or fails
+    to open. After max_failures in a row (no audio in between) set `failed`, so
+    run() exits non-zero and systemd restarts the service."""
+    failures = 0
+    while not stop.is_set():
+        src, opened = None, False
+        try:
+            src = open_source()
+            with src:
+                opened = True
+                segmenter.reset()  # drop any half-cut utterance from before
+                vad.reset()
+                audio_loop(src, segmenter, vad, gate, segments, stop)
+            return
+        except MicStalled as e:
+            err = e
+        except Exception as e:  # noqa: BLE001 - logged; the main thread sees `failed`
+            if opened:  # not a device problem: a bug in the VAD/segmenter path
+                log.exception("audio thread failed")
+                failed.set()
+                return
+            err = e  # the device would not open (gone, busy): retry like a stall
+        failures = 1 if getattr(src, "reads", 0) else failures + 1
+        if failures >= max_failures:
+            log.error("mic failed %d times in a row (%s); giving up", failures, err)
+            failed.set()
+            return
+        log.warning("mic failed (%d/%d): %s; reopening", failures, max_failures, err)
+        stop.wait(retry_s)
 
 
 def _drain(q: "queue.Queue") -> int:
@@ -228,8 +279,10 @@ def run(cfg: Config, wav_path=None, config_path=None) -> int:
     face = FaceBus.sender(cfg.face.bus_port)
     raw_lights = (WledSerial(cfg.lights.serial_port, cfg.lights.baud)
                   if cfg.lights.kind == "wled" else LogLights())
-    output = Player(find_device(cfg.audio.output_device, "output"))
+    output = Player(find_device(cfg.audio.output_device, "output",
+                                cfg.audio.prefer_alsa_plug))
     controller = None
+    audio_thread = None
     try:
         _push_idle(raw_lights, face)
         gate = AnswerGate(raw_lights)
@@ -260,52 +313,50 @@ def run(cfg: Config, wav_path=None, config_path=None) -> int:
 
         if wav_path:
             source = WavSource(wav_path, cfg.audio.sample_rate)
-            source_cm = contextlib.nullcontext(source)
+            open_source = lambda: contextlib.nullcontext(source)  # noqa: E731
         else:
             source = None
-            source_cm = Mic(find_device(cfg.audio.input_device, "input"),
-                            cfg.audio.sample_rate)
+            mic_device = find_device(cfg.audio.input_device, "input",
+                                     cfg.audio.prefer_alsa_plug)
+            open_source = lambda: Mic(mic_device, cfg.audio.sample_rate)  # noqa: E731
 
-        segments: "queue.Queue[np.ndarray]" = queue.Queue()
+        segments: "queue.Queue[np.ndarray]" = queue.Queue(maxsize=SEGMENTS_MAX)
         failed = threading.Event()
-        with source_cm as src:
-            def audio_thread():
-                try:
-                    audio_loop(src, segmenter, vad, gate, segments, stop)
-                except Exception:
-                    log.exception("audio thread failed")
-                    failed.set()
-
-            threading.Thread(target=audio_thread, name="audio", daemon=True).start()
-            log.info("ready")
-            while not stop.is_set() and not failed.is_set():
-                try:
-                    seg = segments.get(timeout=TICK_S)
-                except queue.Empty:
-                    seg = None
-                if seg is not None:
-                    log.info("segment: %.1f s", len(seg) / cfg.audio.sample_rate)
-                    if source is not None:
-                        player.speech_end = source.speech_end
-                    else:  # the segment ends with ~0.7 s of VAD hang-over silence
-                        player.speech_end = time.monotonic() - 0.7
-                    controller.on_segment(seg)
-                    player.speech_end = None
-                    if gate.answered.is_set():
-                        gate.answered.clear()
-                        dropped = _drain(segments)
-                        if dropped:
-                            log.info("dropped %d stale segment(s)", dropped)
-                controller.tick()
-                if source is not None and source.done.is_set() and segments.empty():
-                    log.info("wav finished; state %s", controller.state.value)
-                    break
+        audio_thread = threading.Thread(
+            target=audio_worker, name="audio", daemon=True,
+            args=(open_source, segmenter, vad, gate, segments, stop, failed))
+        audio_thread.start()
+        log.info("ready")
+        while not stop.is_set() and not failed.is_set():
+            try:
+                seg = segments.get(timeout=TICK_S)
+            except queue.Empty:
+                seg = None
+            if seg is not None:
+                log.info("segment: %.1f s", len(seg) / cfg.audio.sample_rate)
+                if source is not None:
+                    player.speech_end = source.speech_end
+                else:  # the segment ends with ~0.7 s of VAD hang-over silence
+                    player.speech_end = time.monotonic() - 0.7
+                controller.on_segment(seg)
+                player.speech_end = None
+                if gate.answered.is_set():
+                    gate.answered.clear()
+                    dropped = _drain(segments)
+                    if dropped:
+                        log.info("dropped %d stale segment(s)", dropped)
+            controller.tick()
+            if source is not None and source.done.is_set() and segments.empty():
+                log.info("wav finished; state %s", controller.state.value)
+                break
         return 1 if failed.is_set() else 0
     except _Shutdown:
         log.info("shutting down")
         return 0
     finally:
         stop.set()
+        if audio_thread is not None:
+            audio_thread.join(timeout=1.0)  # closes the mic within one chunk
         if controller is not None:
             with contextlib.suppress(Exception):
                 controller.close()  # waits (bounded) for a background re-warm

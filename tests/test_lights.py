@@ -51,7 +51,7 @@ def test_open_retry_throttled_to_10s(monkeypatch):
     opens = []
 
     class FakeSerial:
-        def __init__(self, port, baud, timeout=None):
+        def __init__(self, port, baud, **kwargs):
             opens.append(port)
             raise OSError("no port")
 
@@ -72,3 +72,42 @@ def test_presets_and_loglights(caplog):
     with caplog.at_level("INFO", logger="mirror.lights"):
         LogLights().set_state(State.IDLE)
     assert "idle" in caplog.text
+
+
+def test_serial_write_timeout_closes_and_retries(monkeypatch, caplog):
+    import sys
+    import types
+
+    class SerialTimeoutException(OSError):
+        pass
+
+    made = []
+
+    class FakeSerial:
+        def __init__(self, port, baud, **kwargs):
+            self.kwargs = kwargs
+            self.closed = False
+            made.append(self)
+
+        def write(self, data):
+            raise SerialTimeoutException("Write timeout")
+
+        def flush(self):
+            pass
+
+        def close(self):
+            self.closed = True
+
+    monkeypatch.setitem(sys.modules, "serial", types.SimpleNamespace(
+        Serial=FakeSerial, SerialTimeoutException=SerialTimeoutException))
+    now = [0.0]
+    lights = WledSerial("/dev/ttyX", 115200, clock=lambda: now[0])
+    with caplog.at_level("WARNING", logger="mirror.lights"):
+        lights.set_state(State.SPEAKING)  # must return, not raise or block
+    (ser,) = made
+    assert ser.kwargs["write_timeout"] == 1 and ser.kwargs["timeout"] == 1
+    assert ser.closed
+    assert "Write timeout" in caplog.text
+    now[0] += 11
+    lights.set_state(State.SPEAKING)
+    assert len(made) == 2  # reopened after the retry interval

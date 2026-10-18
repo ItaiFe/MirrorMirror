@@ -145,3 +145,129 @@ def test_warm_llm_warms_both_languages_and_survives_failure(caplog):
     assert warm_llm(llm) == ["en"]
     assert llm.langs == ["en", "he"]
     assert "down" in caplog.text
+
+
+class _Resettable:
+    def __init__(self):
+        self.resets = 0
+
+    def reset(self):
+        self.resets += 1
+
+
+class _Segmenter(_Resettable):
+    def feed(self, chunk):
+        return [chunk]
+
+
+class _Gate:
+    def __init__(self):
+        import threading
+
+        self.answering = threading.Event()
+
+
+class _StallingMic:
+    """Yields `chunks` reads, then raises MicStalled (like Mic.read's timeout)."""
+
+    def __init__(self, chunks, log):
+        self.chunks, self.reads, self.log = chunks, 0, log
+
+    def __enter__(self):
+        self.log.append("open")
+        return self
+
+    def __exit__(self, *exc):
+        self.log.append("close")
+
+    def read(self):
+        from mirror.audio import MicStalled
+        import numpy as np
+
+        if self.reads >= self.chunks:
+            raise MicStalled("no audio")
+        self.reads += 1
+        return np.zeros(512, np.float32)
+
+
+def _run_worker(open_source, max_failures=3):
+    import queue
+    import threading
+
+    from mirror.voice_main import audio_worker
+
+    segments, stop, failed = queue.Queue(maxsize=100), threading.Event(), threading.Event()
+    seg, vad = _Segmenter(), _Resettable()
+    audio_worker(open_source, seg, vad, _Gate(), segments, stop, failed,
+                 max_failures=max_failures, retry_s=0.0)
+    return failed, segments, seg, vad
+
+
+def test_audio_worker_reopens_a_stalled_mic_then_gives_up(caplog):
+    events, mics = [], []
+
+    def open_mic():
+        mics.append(_StallingMic(0, events))
+        return mics[-1]
+
+    with caplog.at_level("WARNING", logger="mirror.voice"):
+        failed, *_ = _run_worker(open_mic)
+    assert failed.is_set()
+    assert events == ["open", "close"] * 3
+    assert "reopening" in caplog.text and "giving up" in caplog.text
+
+
+def test_audio_worker_counts_only_consecutive_failures():
+    events, opened = [], []
+    script = [2, 0, 5, 0, 0]  # chunks each mic yields before stalling
+
+    def open_mic():
+        opened.append(1)
+        return _StallingMic(script[len(opened) - 1], events)
+
+    failed, segments, seg, vad = _run_worker(open_mic)
+    assert failed.is_set()
+    assert len(opened) == 5  # failures 1, 2; audio in between resets it: 1, 2, 3
+    assert segments.qsize() == 7
+    assert seg.resets == vad.resets == 5  # fresh VAD state on each reopen
+
+
+def test_audio_worker_retries_a_failing_open():
+    calls = []
+
+    def open_mic():
+        calls.append(1)
+        raise RuntimeError("Error querying device -1")
+
+    failed, *_ = _run_worker(open_mic)
+    assert failed.is_set() and len(calls) == 3
+
+
+def test_audio_worker_fails_at_once_on_a_pipeline_bug(caplog):
+    events = []
+
+    class BadSegmenter(_Segmenter):
+        def feed(self, chunk):
+            raise ValueError("bug")
+
+    import queue
+    import threading
+
+    from mirror.voice_main import audio_worker
+
+    failed = threading.Event()
+    audio_worker(lambda: _StallingMic(5, events), BadSegmenter(), _Resettable(), _Gate(),
+                 queue.Queue(), threading.Event(), failed, retry_s=0.0)
+    assert failed.is_set() and events == ["open", "close"]
+    assert "audio thread failed" in caplog.text
+
+
+def test_segment_queue_drops_the_oldest_when_full():
+    import queue
+
+    from mirror.voice_main import _put_dropping_oldest
+
+    q = queue.Queue(maxsize=3)
+    for i in range(5):
+        _put_dropping_oldest(q, i)
+    assert [q.get_nowait() for _ in range(3)] == [2, 3, 4]

@@ -117,9 +117,25 @@ X display `:0`. If the desktop runs on another display (in a terminal on the Ori
 desktop, `echo $DISPLAY`), change `Environment=DISPLAY=` in
 `~/.config/systemd/user/mirror-face.service`, then `systemctl --user daemon-reload`
 and `systemctl --user restart mirror-face`.
-**If the mic or speaker isn't found:** `journalctl --user -u mirror-voice` lists the audio
-devices it saw; the config looks for a name containing `XVF3800` (`[audio]` in
-`config/orin.toml`).
+**If the mic or speaker isn't found, or the mirror is silent:** at startup
+`journalctl --user -u mirror-voice` logs the chosen devices (`input device: [N] ...`,
+`output device: [N] ...`) and the formats opened (`mic open: 48000 Hz x 2 ch ...`,
+`audio output open: ...`). To see every device PortAudio offers, with its index and
+channel counts, run on the Orin:
+
+```sh
+.venv/bin/python -m sounddevice    # in the repo checkout; one line per device: index, name, (in, out)
+```
+
+The config picks the device whose name contains `input_device` / `output_device`
+(`[audio]` in `config/orin.toml`, default `XVF3800`). The ReSpeaker's raw ALSA device
+(`... (hw:2,0)`) only takes 16 or 48 kHz and 2 channels; the mirror negotiates a format it
+accepts and resamples itself, so that is fine. With `prefer_alsa_plug = true` and several
+matching names, a converting device (`plughw`, `pulse`, `pipewire`, `default`) is preferred.
+If the card is held by PulseAudio ("Device unavailable" / "busy"), set
+`input_device = "pulse"` and `output_device = "pulse"` (or `"default"`) to go through it,
+then `systemctl --user restart mirror-voice`. A mic that delivers no audio for 2 s is
+reopened; after 3 failures in a row the service exits and systemd restarts it.
 **If the lights don't react:** check that the ESP32 shows up as `/dev/ttyUSB0`
 (`ls /dev/ttyUSB* /dev/ttyACM*`); otherwise set `serial_port` in `config/orin.toml`.
 

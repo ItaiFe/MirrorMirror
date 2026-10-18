@@ -753,3 +753,33 @@ def test_close_joins_rewarm_and_stops_new_ones():
     clock.t += 10_000
     ctl.tick()
     assert ctl._rewarm_thread is thread  # no new re-warm after close
+
+
+def _connection_error(msg):
+    import requests
+
+    try:
+        raise LLMError(msg) from requests.exceptions.ConnectionError("refused")
+    except LLMError as e:
+        return e
+
+
+def test_connection_error_rewarms_both_slots():
+    llm = WarmLLM([_connection_error("down")])
+    ctl, p, clock = make([Transcript("mirror mirror who", "en")], llm=llm)
+    ctl.on_segment(SEG)  # llama-server restarted: the request fails
+    assert ctl.state == State.IDLE
+    ctl.tick()
+    _wait_rewarm(ctl)
+    ctl.tick()
+    _wait_rewarm(ctl)
+    assert sorted(llm.warmed) == ["en", "he"]
+
+
+def test_other_llm_errors_do_not_trigger_rewarm():
+    llm = WarmLLM([LLMError("empty reply")])
+    ctl, p, clock = make([Transcript("mirror mirror who", "en")], llm=llm)
+    ctl.on_segment(SEG)
+    ctl.tick()
+    _wait_rewarm(ctl)
+    assert llm.warmed == []
