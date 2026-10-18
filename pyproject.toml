@@ -28,6 +28,15 @@ hw = ["sounddevice==0.5.6", "pyserial==3.5", "onnxruntime==1.23.2"]
 tts = ["piper-tts[alignment]==1.8.0", "phonikud==0.4.1", "phonikud-onnx==1.0.6", "huggingface_hub",
        "onnxruntime==1.23.2",
        "renikud-plus==0.5.0; python_version >= '3.12'", "hebrew-num2words==0.1.0"]
+# Pocket TTS, the optional voice for both languages (tts.engine = "pocket"; off by
+# default). pocket-tts-onnx is not on PyPI and declares Python >= 3.13 plus deps we
+# don't use (conikud, espeakng-loader, huggingface-hub) or pin lower (numpy >= 2.5.2,
+# onnxruntime >= 1.29.0); its runtime path needs only numpy, onnxruntime and
+# sentencepiece and runs on 3.10/3.11 with onnxruntime 1.23.2 (tested). So, like
+# renikud-plus, it is installed by setup_orin.sh (and the README) with pip
+# --no-deps --ignore-requires-python, pinned to this commit:
+#   pocket-tts-onnx @ git+https://github.com/thewh1teagle/pocket-tts-onnx@9860fc0fe0ee5ffb13a4bae2fb99e9bd913acbe5
+pocket = ["sentencepiece==0.2.2", "onnxruntime==1.23.2"]
 # The MMS Hebrew fallback voice only (tts.he_engine = "mms"). On the Orin, install
 # NVIDIA's JetPack torch wheel first: deploy/setup_orin.sh --with-mms.
 mms = ["transformers", "torch"]

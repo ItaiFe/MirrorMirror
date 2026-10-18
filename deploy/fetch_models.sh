@@ -50,6 +50,27 @@ fetch "$PHONIKUD_TTS/model.config.json" phonikud-tts-he.onnx.json
 RENIKUD="$HF/notmax123/RenikudPlus/resolve/679c56ca449d41873fb8ff7711ddf7563d28198f"
 fetch "$RENIKUD/model_int8.onnx" renikud-plus.int8.onnx
 
+# Pocket TTS (CC-BY-4.0; thewh1teagle's ONNX export of Kyutai's Pocket TTS with the
+# Hebrew IPA adapter and built-in voices), the optional engine (tts.engine = "pocket").
+# ~232 MB, pinned revision, checked against its sha256.
+POCKET="$HF/thewh1teagle/pocket-tts-onnx/resolve/110f5251188e9407b4f724acdd8b0dfd0b20692a"
+POCKET_SHA256=4c4592b7c5aadab2235ddc1409a0209aa164161a060543bf96a984298dfc6529
+if [ ! -s "$DIR/pocket-tts-english-ipa.onnx" ]; then
+    fetch "$POCKET/pocket-tts-english-ipa.onnx" pocket-tts-english-ipa.onnx
+    if command -v sha256sum >/dev/null; then
+        got=$(sha256sum "$DIR/pocket-tts-english-ipa.onnx" | cut -d' ' -f1)
+    else
+        got=$(shasum -a 256 "$DIR/pocket-tts-english-ipa.onnx" | cut -d' ' -f1)
+    fi
+    if [ "$got" != "$POCKET_SHA256" ]; then
+        echo "ERROR: pocket-tts-english-ipa.onnx sha256 $got, expected $POCKET_SHA256" >&2
+        rm -f "$DIR/pocket-tts-english-ipa.onnx"
+        exit 1
+    fi
+else
+    echo "skip  pocket-tts-english-ipa.onnx (exists)"
+fi
+
 # Hugging Face cache: Phonikud's tokenizer (loaded by name, so on the main ref)
 # and the MMS Hebrew fallback voice.
 echo "cache dicta-il/dictabert-large-char-menaked tokenizer, facebook/mms-tts-heb -> $DIR/hf"

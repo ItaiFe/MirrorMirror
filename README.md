@@ -56,6 +56,43 @@ Then say "Mirror, mirror on the wall, ..." or "מראה, מראה שעל הקי�
   (`tts.he_engine = "mms"`) add the `mms` extra: `-e '.[dev,hw,tts,mms]'` (pulls in torch).
 - The oracle's background story is `config/oracle_world.md`; edit it freely, it is read at start.
 
+### Optional voice: Pocket TTS (off by default)
+
+`tts.engine = "pocket"` swaps both voices for [Pocket TTS ONNX](https://huggingface.co/thewh1teagle/pocket-tts-onnx)
+(CC-BY-4.0: Kyutai's Pocket TTS, ONNX export and Hebrew IPA adapter by thewh1teagle).
+One model speaks English (as text) and Hebrew (as RenikudPlus IPA), in one voice. The
+default stays `"piper"` until Pocket is measured on the Orin (it is ~5x slower than
+Piper: RTF ~0.17-0.20 on an M2 at 2 threads) and someone has listened to it. If Pocket
+fails to load, the mirror logs a WARNING and uses the piper stack.
+
+```sh
+# not on PyPI and declares Python >= 3.13, but runs on 3.10/3.11 (uv can't override that):
+uv pip install --python .venv -e '.[pocket]'
+.venv/bin/python -m ensurepip
+.venv/bin/python -m pip install --no-deps --ignore-requires-python \
+    "pocket-tts-onnx @ git+https://github.com/thewh1teagle/pocket-tts-onnx@9860fc0fe0ee5ffb13a4bae2fb99e9bd913acbe5"
+```
+
+`make models` fetches `pocket-tts-english-ipa.onnx` (232 MB, pinned, sha256-checked);
+`setup_orin.sh` installs the package. Then in the config's `[tts]`:
+
+- `engine = "pocket"`; `pocket_threads = 2` (the upstream design point).
+- `pocket_voice`: a built-in voice. `javert` (CC0, the deepest) is the default; `michael`
+  (CC-BY) is steadier on short lines; `marius` is CC0. `cosette` is non-commercial, and
+  `omer`/`liat` have undocumented provenance.
+- `pocket_voice_file`: a cloned voice instead. Clone on the Mac, never on the Orin (the
+  encoder needs ~1.5 GB): `python tools/clone_voice.py REF.wav OUT.npy` (10-20 s of one
+  clear speaker), copy `OUT.npy` over and point `pocket_voice_file` at it. **Kyutai's
+  terms forbid cloning or imitating a voice without its owner's explicit consent.**
+
+Differences from Piper: Pocket gives no phoneme timings, so the mouth track is estimated
+from the IPA (espeak for English) and the audio's loudness (about 55% of frames and 77%
+of lip closures match Piper's exact track). Short sentences sometimes stop after the
+first word; a clip shorter than 45% of its expected length is re-rolled with a new seed
+(at most twice, keeping the longest). Leading silence over 0.1 s (often ~1 s on English)
+is trimmed. Its voices speak slower, so most filler lines run past the 2.5 s filler
+budget: the startup log warns about each one.
+
 ---
 
 ## Orin deploy

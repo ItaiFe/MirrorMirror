@@ -104,7 +104,7 @@ step "3/8 Python venv $VENV"
 python3 -c 'import sys; sys.exit(sys.version_info < (3, 10))' || die "need Python 3.10+"
 [ -x "$VENV/bin/python" ] || python3 -m venv "$VENV"
 "$VENV/bin/pip" install --upgrade pip
-EXTRAS="hw,tts"
+EXTRAS="hw,tts,pocket"
 if [ "$WITH_MMS" = 1 ]; then
     # Before the extras, so pip keeps NVIDIA's CUDA build. Skipped once torch is in.
     "$VENV/bin/pip" show torch >/dev/null 2>&1 || "$VENV/bin/pip" install "$TORCH_WHEEL"
@@ -117,6 +117,13 @@ fi
 # on >= 3.12, so install it here, pinned, without its own dependency checks.
 "$VENV/bin/pip" show renikud-plus 2>/dev/null | grep -qx 'Version: 0.5.0' ||
     "$VENV/bin/pip" install --no-deps --ignore-requires-python "renikud-plus==0.5.0"
+# Pocket TTS (optional engine, tts.engine = "pocket"): not on PyPI, declares Python >= 3.13
+# and unused/too-new dependencies; it runs on 3.10 with what the pocket extra pins. Pinned
+# to a commit, installed without its dependency checks (see pyproject.toml).
+POCKET_SHA=9860fc0fe0ee5ffb13a4bae2fb99e9bd913acbe5
+"$VENV/bin/pip" show pocket-tts-onnx >/dev/null 2>&1 ||
+    "$VENV/bin/pip" install --no-deps --ignore-requires-python \
+        "pocket-tts-onnx @ git+https://github.com/thewh1teagle/pocket-tts-onnx@$POCKET_SHA"
 "$VENV/bin/python" -c 'import onnxruntime, sys; v = onnxruntime.__version__
 sys.exit(v != "1.23.2" and f"onnxruntime {v} installed, 1.23.2 expected")'
 
