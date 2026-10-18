@@ -625,3 +625,20 @@ Commit: `perf: full SWA cache for English slot; singular-question Hebrew example
 - [ ] **Smoke:** re-run the experiment's harness (`scratchpad/stt/`) against the new defaults, through the app's `WhisperServerSTT` + `match_wake`. Report wake hit rate he/en, language accuracy and latency. Expected: he wakes ≥ 15/16, en language ≥ 10/12.
 
 Commit: `feat: ivrit-ai Whisper turbo STT with script-based language detection`
+
+---
+
+### Task 23: Pocket TTS as an optional voice engine (off by default)
+
+**Why (Pocket TTS experiment, 2026-10-18; `scratchpad/pocket/pocket.md`):** [Pocket TTS ONNX](https://huggingface.co/thewh1teagle/pocket-tts-onnx) is one CC-BY-4.0 model that speaks English and Hebrew (fed RenikudPlus IPA), with built-in voices (javert CC0, deepest; michael CC-BY) and offline voice cloning to a 0.77 MB `.npy`. Intelligibility matched the current stack, and peak RAM was about 800 MB against about 830 MB. It's slower: M2 RTF 0.16–0.18 at 2 threads, an estimated 0.33–0.45 on the Orin. It gives no phoneme timings, but a RenikudPlus/espeak IPA + energy-envelope estimate matched 55% of frames and 77% of lip closures. Known defect: short sentences sometimes stop after the first word, depending on the seed. Default stays Piper + Phonikud voice + RenikudPlus G2P until it's measured on the Orin and listened to.
+
+**Files:** `mirror/tts.py` (new `PocketTTS` Synth with `synth_visemes`), `mirror/visemes.py` (`estimate_track(ipa, samples, sr)`), `mirror/config.py` + TOMLs (`tts.engine = "piper" | "pocket"`, `tts.pocket_model`, `tts.pocket_voice = "javert"`, `tts.pocket_voice_file` optional cloned `.npy`, `tts.pocket_threads = 2`), `mirror/voice_main.py` (build the router by engine, with fallback to piper on load failure and a WARNING), `deploy/fetch_models.sh` (pinned download, ~232 MB), `pyproject.toml` (pin the package; it claims Python ≥3.13 but runs on 3.10, so install it the same way as renikud-plus), `tools/clone_voice.py` (offline: reference WAV → `.npy`), tests.
+
+- [ ] `PocketTTS(model_path, voice, voice_file=None, threads=2)` implements `synth(text)` and `synth_visemes(text, lang)`. Hebrew text goes through the existing `RenikudG2P` to IPA. English uses the model's own path, with espeak IPA only for the viseme estimate if available (else RMS fallback). Lazy imports, CPU only.
+- [ ] **Truncation guard:** if the output duration is < 45% of an expected duration (phoneme count × 0.06 s, or characters × 0.055 s), re-roll with a new seed, at most 2 times, then accept the longest. Test with a fake model that truncates on the first call.
+- [ ] `estimate_track`: distribute the IPA's phonemes over voiced regions from a 20 ms energy envelope, map them through `PHONEME_TO_SHAPE`, then apply the existing `track_from_alignments` hold rules. Tests: closures (m/b/p) appear as A; the track spans the audio; silence gives X.
+- [ ] **Fillers:** when engine = pocket, check each filler clip's duration at prepare time and log a WARNING for any > 2.5 s.
+- [ ] `tools/clone_voice.py REF.wav OUT.npy` runs offline (the encoder needs ~1.5 GB, so it's for the Mac, not the Orin). README section on choosing or cloning a voice, the consent note (Kyutai's terms forbid cloning without consent), and switching engines.
+- [ ] Smoke on the Mac, with no servers needed: synth plus estimated visemes for 3 English + 3 Hebrew lines with engine = pocket, saving WAVs and printing the RTF.
+
+Commit: `feat: optional Pocket TTS engine with estimated visemes`
