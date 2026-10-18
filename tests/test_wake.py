@@ -18,6 +18,9 @@ from mirror.wake import is_hallucination, match_wake
     ("Mirror mirror, mirror, Shall I change my job?", "shall i change my job"),
     ("Mirror, mirror, mirror on the wall, who is the fairest?", "who is the fairest"),
     ("מראה מראה מראה שעל הקיר מי הכי יפה", "מי הכי יפה"),
+    ("mirror mirror mirror mirror will i find love", "will i find love"),
+    ("Mirror mirror mirror mirror  mirror  around the wall, who", "around the wall who"),
+    ("מראה מראה מראה מראה האם אמצא אהבה", "האם אמצא אהבה"),
 ])
 def test_matches(text, rem):
     assert match_wake(text).remainder == rem

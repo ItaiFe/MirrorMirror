@@ -53,7 +53,7 @@ def match_wake(text: str) -> "WakeMatch | None":
     if len(tokens) < 2 or not (_is_wake_word(tokens[0]) and _is_wake_word(tokens[1])):
         return None
     rest = tokens[2:]
-    if rest and _is_wake_word(rest[0]):  # "mirror mirror mirror ...": one more is fine
+    while rest and _is_wake_word(rest[0]):  # ivrit-ai writes "mirror" up to 5 times
         rest = rest[1:]
     for tail in _TAILS:
         n = len(tail)

@@ -321,6 +321,18 @@ hang-over silence; the whole reply is synthesized before playback starts):
 | Hebrew (vocalized) | Gemma 3 1B Q4_K_M | 0.8 s | 1.9 s | MMS 3.7 s | 6.8 s |
 | English, live via `make dev` (speaker -> mic) | Gemma 3 4B | 4.3 s | 6.1 s | 3.1 s | 14.0 s |
 
+STT alone with the default model (Task 22, 2026-10-18): ivrit-ai Whisper turbo q5_0 with
+`-ac 768`, 38 synthetic TTS clips (Phonikud Hebrew, Piper English, some with 10 dB noise)
+on the same swapping 8 GB Mac, through the app's STT client and wake matcher:
+
+| STT model | Median / max per clip | Hebrew wakes | English wakes | Language he / en |
+|---|---|---|---|---|
+| ivrit-ai turbo q5_0, `-ac 768` (default) | 1.85 / 2.46 s | 16/16 | 7/7 | 26/26 / 10/12 |
+| stock `ggml-small.bin` (old default, spike run) | 0.76 / 1.01 s | 8/16 | 7/7 | 20/26 / 12/12 |
+
+The STT column in the table above was measured with the old small model. Real voices
+through the mic will score lower than these clean synthetic clips.
+
 The 8 GB Mac was swapping with all three models loaded, so these numbers are pessimistic;
 the Orin numbers are what count. Over the 2-4 s target: MMS Hebrew synthesis on CPU and
 synthesizing the whole three-sentence reply before playback are the main costs.
