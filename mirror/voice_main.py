@@ -34,7 +34,8 @@ from mirror.vad import Segmenter, SileroVad
 log = logging.getLogger("mirror.voice")
 
 TICK_S = 0.1
-WAV_TAIL_SILENCE_S = 1.0
+# --wav: after the file, feed enough silence for the segmenter to end the utterance
+WAV_TAIL_MARGIN_S = 0.3
 SEGMENTS_MAX = 3  # queued utterances; under constant noise the oldest are dropped
 MIC_MAX_FAILURES = 3  # consecutive mic stalls/open failures before giving up
 MIC_RETRY_S = 1.0  # pause before reopening a failed mic
@@ -43,6 +44,25 @@ _ANSWERING = (State.THINKING, State.SPEAKING)
 
 class _Shutdown(BaseException):
     """Raised from the signal handler; BaseException so the controller won't swallow it."""
+
+
+def _signal_handler(stop: threading.Event):
+    """SIGINT/SIGTERM handler: the first signal raises _Shutdown; any later one (an
+    impatient second Ctrl-C during teardown) is ignored so the cleanup completes."""
+
+    def on_signal(signum, _frame):
+        if stop.is_set():
+            return
+        stop.set()
+        raise _Shutdown()
+
+    return on_signal
+
+
+def wav_tail_s(segmenter: Segmenter) -> float:
+    """Silence fed after a --wav file: the segmenter's end-of-utterance silence plus
+    a margin, so the last utterance is always cut."""
+    return segmenter.min_silence_s + WAV_TAIL_MARGIN_S
 
 
 class AnswerGate:
@@ -88,10 +108,9 @@ class LatencyPlayer:
 
 
 class WavSource:
-    """Mic stand-in: a WAV file (mono-mixed, resampled to sr) then WAV_TAIL_SILENCE_S
-    of silence, delivered in CHUNK-sized reads paced in real time; silence after that."""
+    """Mic stand-in: a WAV file (mono-mixed, resampled to sr) then tail_s of silence, delivered in CHUNK-sized reads paced in real time; silence after that."""
 
-    def __init__(self, path: str, sr: int = 16000):
+    def __init__(self, path: str, sr: int = 16000, tail_s: float = 1.0):
         with wave.open(path, "rb") as w:
             n_ch, width, rate = w.getnchannels(), w.getsampwidth(), w.getframerate()
             raw = w.readframes(w.getnframes())
@@ -104,7 +123,7 @@ class WavSource:
             audio = np.interp(t_out, np.arange(len(audio)) / rate, audio).astype(np.float32)
         self._speech_samples = len(audio)
         self._audio = np.concatenate(
-            [audio, np.zeros(int(WAV_TAIL_SILENCE_S * sr), np.float32)])
+            [audio, np.zeros(int(round(tail_s * sr)), np.float32)])
         self._sr = sr
         self._pos = 0
         self._t0 = None
@@ -268,22 +287,20 @@ def run(cfg: Config, wav_path=None, config_path=None) -> int:
     from mirror.tts import PiperTTS, TTSRouter  # after the env is set
 
     stop = threading.Event()
-
-    def on_signal(signum, _frame):
-        stop.set()
-        raise _Shutdown()
-
-    signal.signal(signal.SIGTERM, on_signal)
-    signal.signal(signal.SIGINT, on_signal)
-
-    face = FaceBus.sender(cfg.face.bus_port)
-    raw_lights = (WledSerial(cfg.lights.serial_port, cfg.lights.baud)
-                  if cfg.lights.kind == "wled" else LogLights())
-    output = Player(find_device(cfg.audio.output_device, "output",
-                                cfg.audio.prefer_alsa_plug))
+    face = raw_lights = output = None
     controller = None
     audio_thread = None
     try:
+        # inside the try: a signal during device setup is a clean shutdown too
+        on_signal = _signal_handler(stop)
+        signal.signal(signal.SIGTERM, on_signal)
+        signal.signal(signal.SIGINT, on_signal)
+
+        face = FaceBus.sender(cfg.face.bus_port)
+        raw_lights = (WledSerial(cfg.lights.serial_port, cfg.lights.baud)
+                      if cfg.lights.kind == "wled" else LogLights())
+        output = Player(find_device(cfg.audio.output_device, "output",
+                                    cfg.audio.prefer_alsa_plug))
         _push_idle(raw_lights, face)
         gate = AnswerGate(raw_lights)
 
@@ -312,7 +329,7 @@ def run(cfg: Config, wav_path=None, config_path=None) -> int:
             controller.mark_unwarmed(lang)
 
         if wav_path:
-            source = WavSource(wav_path, cfg.audio.sample_rate)
+            source = WavSource(wav_path, cfg.audio.sample_rate, wav_tail_s(segmenter))
             open_source = lambda: contextlib.nullcontext(source)  # noqa: E731
         else:
             source = None
@@ -336,8 +353,8 @@ def run(cfg: Config, wav_path=None, config_path=None) -> int:
                 log.info("segment: %.1f s", len(seg) / cfg.audio.sample_rate)
                 if source is not None:
                     player.speech_end = source.speech_end
-                else:  # the segment ends with ~0.7 s of VAD hang-over silence
-                    player.speech_end = time.monotonic() - 0.7
+                else:  # the segment ends with the segmenter's hang-over silence
+                    player.speech_end = time.monotonic() - segmenter.min_silence_s
                 controller.on_segment(seg)
                 player.speech_end = None
                 if gate.answered.is_set():
@@ -360,10 +377,13 @@ def run(cfg: Config, wav_path=None, config_path=None) -> int:
         if controller is not None:
             with contextlib.suppress(Exception):
                 controller.close()  # waits (bounded) for a background re-warm
-        _lights_to_idle(raw_lights)
-        face.close()
-        with contextlib.suppress(Exception):
-            output.close()
+        if raw_lights is not None:
+            _lights_to_idle(raw_lights)
+        if face is not None:
+            face.close()
+        if output is not None:
+            with contextlib.suppress(Exception):
+                output.close()
 
 
 def main() -> None:

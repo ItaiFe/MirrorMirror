@@ -373,3 +373,24 @@ def test_player_raises_when_a_write_wedges(monkeypatch):
     (stream,) = FakeOutputStream.opened
     assert stream.events[-2:] == ["abort", "close"]
     assert player._stream is None  # the next play opens a fresh stream
+
+
+class FailingStartInputStream(FakeInputStream):
+    def start(self):
+        self.events.append("start")
+        raise OSError("device busy")
+
+
+def test_mic_closes_the_stream_when_start_fails(monkeypatch):
+    sd = _fake_sd()
+    sd.InputStream = FailingStartInputStream
+    FakeInputStream.opened = []
+    monkeypatch.setitem(sys.modules, "sounddevice", sd)
+    mic = audio.Mic(None, 16000)
+    with pytest.raises(OSError, match="busy"):
+        mic.__enter__()
+    (stream,) = FakeInputStream.opened
+    assert stream.events[-1] == "close"  # not leaked
+    assert mic._stream is None
+    mic.__exit__(None, None, None)  # a no-op now
+    assert stream.events.count("close") == 1

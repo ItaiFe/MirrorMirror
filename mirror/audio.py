@@ -4,6 +4,12 @@ A raw ALSA hw: device (the ReSpeaker on the Orin) neither resamples nor remixes:
 it may accept only 16 kHz or 48 kHz, and only 2 channels. So Mic and Player
 negotiate a format the device takes and convert in numpy: the rest of the
 pipeline always sees 16 kHz mono in, and plays each TTS clip at its own rate.
+
+Threads: mirror-voice opens the Mic on its audio thread and the Player on the
+main thread, so two PortAudio streams are opened/closed from different threads.
+Each stream is only ever touched by one thread at a time (the Player's writer
+thread is joined before its stream is aborted or closed); this has worked on
+CoreAudio and ALSA, but if a host API ever objects, open both on one thread.
 """
 from __future__ import annotations
 
@@ -201,8 +207,13 @@ class Mic:
             dtype="float32",
             callback=self._callback,
         )
-        self._stream.start()
-        log.info("mic open: %d Hz x %d ch (channel 0 -> %d Hz mono)", rate, ch, sr)
+        try:
+            self._stream.start()
+            log.info("mic open: %d Hz x %d ch (channel 0 -> %d Hz mono)", rate, ch, sr)
+        except BaseException:
+            # __exit__ never runs for a failed __enter__: don't leak the stream
+            self.__exit__(None, None, None)
+            raise
         return self
 
     def __exit__(self, *exc) -> None:
@@ -278,6 +289,9 @@ class Player:
             self._stream, self._rate = None, None
         writer.join(timeout=1.0)
         if writer.is_alive():  # never touch a stream a write() is still inside
+            # Known leak: the wedged stream stays open (it is already detached, so
+            # the next play opens a fresh one) until the write returns or the
+            # process exits.
             log.warning("audio writer did not stop; leaving the output stream open")
             return
         for op in (stream.abort, stream.close):

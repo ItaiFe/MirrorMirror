@@ -22,6 +22,8 @@ class Segmenter:
         self._n = frame_samples
         frame_ms = 1000.0 * frame_samples / sample_rate
         self._silence_frames = max(1, int(min_silence_ms / frame_ms))  # floor: never exceed min_silence_ms
+        # the trailing silence that ends a segment, in seconds
+        self.min_silence_s = self._silence_frames * frame_ms / 1000.0
         self._speech_frames_min = math.ceil(min_speech_ms / frame_ms)
         self._max_samples = int(max_segment_s * sample_rate)
         self._preroll_frames = int(preroll_ms / frame_ms)

@@ -1,3 +1,4 @@
+import numpy as np
 import pytest
 
 import mirror.tts
@@ -271,3 +272,62 @@ def test_segment_queue_drops_the_oldest_when_full():
     for i in range(5):
         _put_dropping_oldest(q, i)
     assert [q.get_nowait() for _ in range(3)] == [2, 3, 4]
+
+
+def test_signal_during_startup_shuts_down_cleanly(monkeypatch, tmp_path):
+    """A SIGTERM while the face bus / lights / devices are still being set up is a
+    clean shutdown (exit 0), not a traceback."""
+    import mirror.voice_main as vm
+    from mirror.voice_main import _Shutdown
+
+    def interrupted(cls, port):
+        raise _Shutdown()
+
+    monkeypatch.setattr(vm.FaceBus, "sender", classmethod(interrupted))
+    monkeypatch.setattr(vm.signal, "signal", lambda *args: None)
+    monkeypatch.setattr(vm, "LogLights", lambda: FakeLights())
+    from mirror.config import Config
+    cfg = Config()
+    cfg.models_dir = str(tmp_path)
+    assert vm.run(cfg) == 0
+
+
+def test_second_signal_is_ignored():
+    """The first SIGINT/SIGTERM raises _Shutdown; a second one (impatient Ctrl-C
+    during teardown) is ignored, so the cleanup in run()'s finally completes."""
+    import threading
+
+    from mirror.voice_main import _Shutdown, _signal_handler
+
+    stop = threading.Event()
+    handler = _signal_handler(stop)
+    with pytest.raises(_Shutdown):
+        handler(2, None)
+    assert stop.is_set()
+    assert handler(2, None) is None
+
+
+def test_wav_source_tail_is_configurable(tmp_path):
+    import wave
+
+    from mirror.voice_main import WavSource
+
+    path = tmp_path / "a.wav"
+    with wave.open(str(path), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(16000)
+        w.writeframes(np.zeros(1600, "<i2").tobytes())
+    src = WavSource(str(path), 16000, tail_s=0.5)
+    assert len(src._audio) == 1600 + 8000
+
+
+def test_wav_tail_covers_the_segmenter_silence():
+    from mirror.vad import Segmenter
+    from mirror.voice_main import WAV_TAIL_MARGIN_S, wav_tail_s
+
+    seg = Segmenter(lambda f: False, frame_samples=512, sample_rate=16000,
+                    min_silence_ms=1500)
+    assert seg.min_silence_s == pytest.approx(46 * 0.032)  # whole frames, floored
+    assert wav_tail_s(seg) == pytest.approx(seg.min_silence_s + WAV_TAIL_MARGIN_S)
+    assert wav_tail_s(seg) > 1.5
