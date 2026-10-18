@@ -111,3 +111,50 @@ def test_serial_write_timeout_closes_and_retries(monkeypatch, caplog):
     now[0] += 11
     lights.set_state(State.SPEAKING)
     assert len(made) == 2  # reopened after the retry interval
+
+
+def test_reopens_at_once_after_a_healthy_port_fails(monkeypatch):
+    """The open-retry throttle is for a port that won't open: once a port has worked,
+    a later failure is retried straight away (once), not up to 10 s later."""
+    import sys
+    import types
+
+    made = []
+
+    class FakeSerial:
+        fail = False
+
+        def __init__(self, port, baud, **kwargs):
+            made.append(self)
+
+        def write(self, data):
+            if FakeSerial.fail:
+                raise OSError("unplugged")
+
+        def flush(self):
+            pass
+
+        def close(self):
+            pass
+
+    monkeypatch.setitem(sys.modules, "serial", types.SimpleNamespace(Serial=FakeSerial))
+    now = [0.0]
+    lights = WledSerial("/dev/ttyX", 115200, clock=lambda: now[0])
+    lights.set_state(State.LISTENING)  # opens at t=0, works
+    now[0] = 5.0
+    FakeSerial.fail = True
+    lights.set_state(State.THINKING)  # fails, port closed
+    now[0] = 6.0
+    FakeSerial.fail = False
+    lights.set_state(State.SPEAKING)
+    assert len(made) == 2  # reopened at once
+    assert lights._last_sent == State.SPEAKING
+    FakeSerial.fail = True
+    now[0] = 7.0
+    lights.set_state(State.IDLE)  # fails right after a (re)open...
+    now[0] = 8.0
+    lights.set_state(State.IDLE)
+    assert len(made) == 3  # ...the first retry is immediate
+    now[0] = 9.0
+    lights.set_state(State.IDLE)
+    assert len(made) == 3  # but a port failing every write is throttled again

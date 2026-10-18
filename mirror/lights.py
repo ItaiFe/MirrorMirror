@@ -74,6 +74,9 @@ class WledSerial:
         try:
             self._serial.write(data)
             self._serial.flush()
+            # the port works: if it fails later, retry the open at once (the throttle
+            # is for a port that keeps failing, and is re-armed by that first retry)
+            self._last_open_attempt = None
         except Exception:  # incl. serial.SerialTimeoutException
             try:
                 self._serial.close()

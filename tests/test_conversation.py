@@ -783,3 +783,30 @@ def test_other_llm_errors_do_not_trigger_rewarm():
     ctl.tick()
     _wait_rewarm(ctl)
     assert llm.warmed == []
+
+
+def test_next_sentence_synthesized_while_current_one_plays():
+    """Synth-ahead: sentence 2 is synthesized during sentence 1's playback, not after."""
+    synth_two = threading.Event()
+    seen = {}
+
+    class AheadTTS(TextTTS):
+        def synth_visemes(self, text, lang):
+            if text == "Two.":
+                synth_two.set()
+            return super().synth_visemes(text, lang)
+
+    player = FakePlayer()
+    orig = player.play
+
+    def play(samples, sr, on_level):
+        if getattr(samples, "text", None) == "One.":
+            seen["overlap"] = synth_two.wait(2.0)
+        orig(samples, sr, on_level)
+
+    player.play = play
+    ctl, p, _ = make([Transcript("mirror mirror who", "en")],
+                     llm=ScriptedLLM(["One.", "Two."]), tts=AheadTTS(), player=player)
+    ctl.on_segment(SEG)
+    assert seen["overlap"] is True
+    assert played_texts(p["player"]) == ["One.", "Two."]

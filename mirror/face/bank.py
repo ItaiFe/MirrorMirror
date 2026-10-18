@@ -54,10 +54,26 @@ def _box(manifest_box, what: str) -> Box:
         x, y, w, h = (int(v) for v in manifest_box)
     except Exception as e:
         raise BankError(f"manifest.json: bad {what} box {manifest_box!r}") from e
+    if x < 0 or y < 0 or w <= 0 or h <= 0 or x + w > SIZE or y + h > SIZE:
+        raise BankError(f"manifest.json: {what} box {manifest_box!r} is outside the "
+                        f"{SIZE} x {SIZE} face")
     return (x, y, w, h)
 
 
-def _load_patches(root: str, files: dict, box: Box, what: str) -> Dict[str, np.ndarray]:
+def _section(m: dict, key: str, kind: type):
+    """An optional manifest section (empty if absent), checked to be of `kind`."""
+    value = m.get(key)
+    if value is None:
+        return kind()
+    if not isinstance(value, kind):
+        raise BankError(f"manifest.json: {key} must be a {kind.__name__}, "
+                        f"got {type(value).__name__}")
+    return value
+
+
+def _load_patches(root: str, files: dict, box: Box) -> Dict[str, np.ndarray]:
+    if not isinstance(files, dict):
+        raise BankError(f"manifest.json: patches must be a dict, got {type(files).__name__}")
     out = {}
     for key, rel in files.items():
         arr = _read_image(os.path.join(root, rel), "RGBA")
@@ -138,31 +154,35 @@ def load_bank(path: str) -> FaceBank:
         hub=hub,
         mask=mask,
         mouth_box=mouth_box,
-        mouth_patches=_load_patches(path, mouth_files, mouth_box, "mouth"),
+        mouth_patches=_load_patches(path, mouth_files, mouth_box),
     )
 
-    eyes = m.get("eyes")
+    eyes = _section(m, "eyes", dict)
     if eyes:
-        bank.eye_box_left = _box(eyes["box_left"], "eyes.box_left")
-        bank.eye_box_right = _box(eyes["box_right"], "eyes.box_right")
+        try:
+            box_left, box_right = eyes["box_left"], eyes["box_right"]
+        except KeyError as e:
+            raise BankError(f"manifest.json: eyes: missing key {e}") from e
+        bank.eye_box_left = _box(box_left, "eyes.box_left")
+        bank.eye_box_right = _box(box_right, "eyes.box_right")
         # one patch per name, used for both eyes: both boxes share a size
         if bank.eye_box_left[2:] != bank.eye_box_right[2:]:
             raise BankError("manifest.json: eye boxes differ in size")
         bank.eye_patches = _load_patches(
-            path, eyes.get("patches", {}), bank.eye_box_left, "eyes"
+            path, eyes.get("patches", {}), bank.eye_box_left
         )
 
-    for key, rel in m.get("expressions", {}).items():
+    for key, rel in _section(m, "expressions", dict).items():
         arr = _read_image(os.path.join(path, rel), "RGBA")
         _check(rel, arr, (SIZE, SIZE, 4))
         bank.expressions[key] = arr.astype(np.float32) / 255.0
 
-    for key, rel in m.get("warps", {}).items():
+    for key, rel in _section(m, "warps", dict).items():
         arr = _read_npy(os.path.join(path, rel))
         _check(rel, arr, (SIZE, SIZE, 2))
         bank.warps[key] = arr.astype(np.float32, copy=False)
 
-    for rel in m.get("idle_loops", []):
+    for rel in _section(m, "idle_loops", list):
         arr = _read_npy(os.path.join(path, rel))
         if arr.ndim != 4 or arr.shape[1:] != (SIZE, SIZE, 3) or arr.dtype != np.uint8:
             raise BankError(

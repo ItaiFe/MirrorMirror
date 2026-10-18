@@ -1,3 +1,4 @@
+import dataclasses
 import os
 import random
 import statistics
@@ -77,10 +78,14 @@ def _lower_centroid_y(img):
 
 
 def test_jaw_warp_moves_chin(bank):
-    shut, open_ = _face(bank), _face(bank)
-    _settle(shut, State.SPEAKING, 0.0, "C")
-    _settle(open_, State.SPEAKING, 1.0, "C")
-    assert _lower_centroid_y(open_.render()) - _lower_centroid_y(shut.render()) >= 2.0
+    # same mouth level and viseme (so the same patch) with and without the jaw
+    # field: any difference in the chin is the warp's alone
+    no_jaw = dataclasses.replace(bank, warps={**bank.warps,
+                                              "jaw": np.zeros_like(bank.warps["jaw"])})
+    still, moved = _face(no_jaw), _face(bank)
+    _settle(still, State.SPEAKING, 1.0, "C")
+    _settle(moved, State.SPEAKING, 1.0, "C")
+    assert _lower_centroid_y(moved.render()) - _lower_centroid_y(still.render()) >= 2.0
 
 
 def test_crossfade_two_frames(bank):

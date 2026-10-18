@@ -91,3 +91,37 @@ def test_optional_sections_and_warps(tmp_path):
     np.save(tmp_path / "jaw.npy", np.zeros((S, S, 3), np.float32))
     with pytest.raises(BankError, match="jaw.npy"):
         load_bank(str(tmp_path))
+
+
+@pytest.mark.parametrize("mutate", [
+    lambda m: m["eyes"].pop("box_left"),
+    lambda m: m.update(eyes={"box_left": [60, 90, 30, 16], "box_right": [160, 90, 30, 16],
+                             "patches": ["eyes/open.png"]}),
+    lambda m: m.update(expressions=["smirk.png"]),
+    lambda m: m.update(warps="jaw.npy"),
+    lambda m: m.update(idle_loops="loop.npy"),
+])
+def test_malformed_optional_sections_raise_bank_error(tmp_path, mutate):
+    m = make_bank(tmp_path)
+    mutate(m)
+    (tmp_path / "manifest.json").write_text(json.dumps(m))
+    with pytest.raises(BankError, match="manifest.json"):
+        load_bank(str(tmp_path))
+
+
+@pytest.mark.parametrize("section,box", [
+    ("mouth", [230, 150, 40, 20]),   # runs off the right edge
+    ("mouth", [-1, 150, 40, 20]),    # negative origin
+    ("mouth", [90, 150, 0, 20]),     # empty
+    ("eyes", [60, 240, 30, 16]),     # runs off the bottom
+])
+def test_box_outside_the_face_raises_bank_error(tmp_path, section, box):
+    m = make_bank(tmp_path)
+    if section == "mouth":
+        m["mouth"]["box"] = box
+    else:
+        m["eyes"]["box_left"] = box
+        m["eyes"]["box_right"] = [160] + box[1:]
+    (tmp_path / "manifest.json").write_text(json.dumps(m))
+    with pytest.raises(BankError, match="box"):
+        load_bank(str(tmp_path))

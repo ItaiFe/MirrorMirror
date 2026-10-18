@@ -8,7 +8,6 @@ face bank (face.renderer = "sprite") or the procedural line face
 import argparse
 import logging
 import math
-import os
 import random
 import signal
 import time

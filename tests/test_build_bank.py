@@ -158,3 +158,15 @@ def test_write_bank_clears_stale_files(tmp_path):
     stub_bank.build_stub_bank(str(src), str(out))
     assert not stale.exists() and not (out / "expr").exists()
     load_bank(str(out))
+
+
+def test_align_warns_when_ecc_fails(monkeypatch, capsys):
+    def no_convergence(*args, **kwargs):
+        raise cv2.error("findTransformECC: the algorithm stopped before convergence")
+
+    monkeypatch.setattr(build_bank.cv2, "findTransformECC", no_convergence)
+    hub = _textured_face(504, seed=5)
+    out = build_bank.align(hub, _shift(hub, 2.0, 1.0), name="lip_04.png")
+    err = capsys.readouterr().err
+    assert "lip_04.png" in err and "ECC" in err and "coarse" in err
+    assert out.shape == hub.shape  # still aligned, with the phase-correlation estimate
