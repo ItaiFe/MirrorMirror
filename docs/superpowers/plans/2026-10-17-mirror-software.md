@@ -593,3 +593,17 @@ Commit: `perf: pinned prompt cache, warmup, stall handling, Hebrew examples`
 - [ ] **Step 5: Default.** Set `he_g2p = "renikud"` only if Step 3 shows no regressions in a fluent read of the IPA and listening. Otherwise leave Phonikud as the default and report.
 
 Commit: `feat: RenikudPlus Hebrew G2P option`
+
+---
+
+### Task 21: Fix the English prompt-cache miss and harden Hebrew address
+
+**Why (from the Hebrew LLM bake-off, 2026-10-18):** with Gemma 3, llama-server turns off `cache_reuse` because of sliding-window attention. The English slot then re-processes ~515 of its 764 prompt tokens every turn (1.5–3.3 s on the Mac). Separately, Gemma 3 4B slips into singular Hebrew address in 3–5 of 10 replies, mostly when the visitor speaks in the singular or feminine. The current few-shot examples are all gender-neutral. The bake-off kept Gemma 3 4B as the model (best oracle tone; Gemma 4 E2B is the runner-up, so make the model file a config value).
+
+**Files:** `Makefile`, `deploy/systemd/mirror-llm.service`, `mirror/persona.py`, `mirror/config.py` + TOMLs (`servers.llm_model` already exists? if not, add it), `tests/test_llm.py`.
+
+- [ ] **Step 1:** Add `--swa-full` to llama-server in both the Makefile and the service file. Measure on the Mac with a short script that sends two consecutive English requests with the full system prompt through `LlamaServerLLM`, and read `timings.prompt_n` on the second. Expected: the second English request re-processes ≤ 20 tokens. Record llama-server's reported KV memory with and without the flag. If the memory increase is above 600 MB at `-c 8192 -np 2`, use `-c 6144` instead and re-measure.
+- [ ] **Step 2:** Add 2 Hebrew few-shot pairs where the **question** is in the singular (one masculine, one feminine, e.g. "מה מחכה לי השנה?" asked by a woman), and the oracle **answer stays in the gender-neutral plural** with correct agreement. Keep the anti-parroting header. Test: the Hebrew prompt contains the new examples, and every example answer passes a simple singular-marker check (no standalone את/אתה/לך/שלך).
+- [ ] **Step 3:** A plural-address check on generated replies is out of scope (no live LLM in tests). Instead, add `tools/hebrew_address_check.py`, a small script that runs N Hebrew questions against the running llama-server and reports the singular-marker rate, so it can be re-run on the Orin.
+
+Commit: `perf: full SWA cache for English slot; singular-question Hebrew examples`
