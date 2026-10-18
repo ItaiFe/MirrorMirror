@@ -1,0 +1,12 @@
+# Re-apply "never blank, never power off" on the X display, in case GNOME's
+# settings daemon turns DPMS back on. Started every 10 min by mirror-dpms.timer.
+# A systemd *user* unit; deploy/setup_orin.sh installs it into ~/.config/systemd/user/.
+[Unit]
+Description=Mirror, Mirror: keep the screen from blanking
+
+[Service]
+Type=oneshot
+Environment=DISPLAY=:0
+Environment=XAUTHORITY=%t/gdm/Xauthority
+# "-": no X yet (early boot) is fine; the next run catches it.
+ExecStart=-/usr/bin/xset s off -dpms

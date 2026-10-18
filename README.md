@@ -64,6 +64,10 @@ monitor, or the LED panels once NovaLCT is done).
    deploy/setup_orin.sh
    ```
 
+   Run it logged in as `mirror` directly (in a terminal on the Orin's desktop, or
+   `ssh mirror@<orin-ip>`), not through `sudo -u mirror` or `su mirror`: it needs
+   that user's own systemd session, and it stops with a message if it can't find it.
+   It also needs the desktop (GDM) that JetPack's SD card image comes with.
    It asks for your password (sudo) and takes a while (building whisper.cpp and
    llama.cpp with CUDA, plus about 4 GB of model downloads: count on about an hour).
 3. **Reboot**: `sudo reboot`. The Orin logs itself in, and about a minute later the
@@ -76,7 +80,8 @@ restarted with the new code.
 What `deploy/setup_orin.sh` does, step by step:
 
 1. Installs build tools and libraries with apt, and adds you to the `dialout`
-   (serial port for the lights) and `audio` groups.
+   (serial port for the lights) and `audio` groups. The new groups take effect after
+   the reboot at the end.
 2. Builds `whisper-server` and `llama-server` with CUDA into `~/mirror-bin`
    (versions pinned in the script: `WHISPER_REF`, `LLAMA_REF`).
 3. Creates the Python venv `~/MirrorMirror/.venv` and installs the app
@@ -87,7 +92,8 @@ What `deploy/setup_orin.sh` does, step by step:
 5. Installs the four services as systemd *user* units (`~/.config/systemd/user/`)
    and turns on "linger", so they start at boot without anyone logging in.
 6. Sets up the desktop for the face: automatic login on Xorg (not Wayland), never
-   blank the screen, no lock screen, no pop-ups (`deploy/xorg/10-mirror.conf` + GNOME settings).
+   blank the screen, no lock screen, no pop-ups (`deploy/xorg/10-mirror.conf` + GNOME settings,
+   and `mirror-dpms.timer` re-applies "no blanking" every 10 minutes).
 7. Spares the SD card: logs are kept in RAM only, and any swap *file* is removed
    (the zram swap in RAM stays).
 8. Sets the power mode (`nvpmodel -m 0`) and runs `jetson_clocks` at every boot.

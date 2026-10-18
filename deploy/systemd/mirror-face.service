@@ -13,9 +13,10 @@ Environment=XAUTHORITY=%t/gdm/Xauthority
 WorkingDirectory=@REPO@
 # No screen saver, no blanking, no DPMS power-off.
 ExecStartPre=/usr/bin/xset s off -dpms
-# Lock the connected output (the MSD300) to 1920x1080. Best effort ("-"): if the
-# card doesn't offer that mode, the face still starts and pygame asks for it.
-ExecStartPre=-/bin/sh -c 'out=$$(xrandr | grep -m1 " connected" | cut -d" " -f1) && [ -n "$$out" ] && xrandr --output "$$out" --mode 1920x1080'
+# Lock the connected output (the MSD300) to 1920x1080 if it isn't already. Best
+# effort ("-"): if the card doesn't offer that mode, the face still starts and pygame
+# asks for it. mirror-dpms.timer re-applies the xset line every 10 min.
+ExecStartPre=-/bin/sh -c 'line=$$(xrandr | grep -m1 " connected") && out=$$(echo "$$line" | cut -d" " -f1) && [ -n "$$out" ] && { echo "$$line" | grep -q " 1920x1080+" || xrandr --output "$$out" --mode 1920x1080; }'
 ExecStart=@REPO@/.venv/bin/mirror-face --config @REPO@/config/orin.toml
 Restart=always
 RestartSec=2

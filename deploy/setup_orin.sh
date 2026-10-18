@@ -37,6 +37,7 @@ MODELS="$HOME/mirror-models"    # deploy/fetch_models.sh output
 VENV="$REPO/.venv"
 UNITS="$HOME/.config/systemd/user"
 USER_UNITS=(mirror-stt mirror-llm mirror-voice mirror-face)
+DPMS_UNITS=(mirror-dpms.service mirror-dpms.timer)   # re-applies "no blanking" every 10 min
 
 # The versions the Mac dev loop was tested with (Homebrew, 2026-10-17).
 WHISPER_REF="${WHISPER_REF:-v1.9.5}"
@@ -57,6 +58,13 @@ if ! grep -q "^models_dir = \"$MODELS\"" "$REPO/config/orin.toml"; then
     warn "config/orin.toml does not point at $MODELS (it expects the user 'mirror')."
     warn "Edit its paths to match before rebooting."
 fi
+
+# Checks up front, so nothing fails after the long build.
+[ -d /etc/gdm3 ] || die "gdm3 not installed: install ubuntu-desktop-minimal or gdm3 first (the face needs the desktop's X server)"
+# `systemctl --user` needs this user's own systemd bus, which exists in a normal SSH or
+# desktop login, but not under `sudo -u mirror` or `su mirror`.
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+[ -S "$XDG_RUNTIME_DIR/bus" ] || die "no user systemd bus at $XDG_RUNTIME_DIR/bus: log in as $ME directly (ssh $ME@<orin> or the desktop) and run this again, not through sudo -u or su"
 
 step "1/8 system packages"
 sudo apt-get update
@@ -96,7 +104,8 @@ python3 -c 'import sys; sys.exit(sys.version_info < (3, 10))' || die "need Pytho
 "$VENV/bin/pip" install --upgrade pip
 EXTRAS="hw,tts"
 if [ "$WITH_MMS" = 1 ]; then
-    "$VENV/bin/pip" install "$TORCH_WHEEL"   # before the extras, so pip keeps NVIDIA's CUDA build
+    # Before the extras, so pip keeps NVIDIA's CUDA build. Skipped once torch is in.
+    "$VENV/bin/pip" show torch >/dev/null 2>&1 || "$VENV/bin/pip" install "$TORCH_WHEEL"
     EXTRAS="$EXTRAS,mms"
 fi
 "$VENV/bin/pip" install -e "${REPO}[$EXTRAS]"
@@ -109,9 +118,12 @@ mkdir -p "$UNITS"
 for unit in "${USER_UNITS[@]}"; do
     sed "s|@REPO@|$REPO|g" "$REPO/deploy/systemd/$unit.service" > "$UNITS/$unit.service"
 done
+for unit in "${DPMS_UNITS[@]}"; do
+    install -m 644 "$REPO/deploy/systemd/$unit" "$UNITS/$unit"
+done
 sudo loginctl enable-linger "$ME"   # start the user units at boot, without a login
 systemctl --user daemon-reload
-systemctl --user enable "${USER_UNITS[@]/%/.service}"
+systemctl --user enable "${USER_UNITS[@]/%/.service}" mirror-dpms.timer
 # After a `git pull`: restart whatever is running so it picks up the new code.
 systemctl --user try-restart "${USER_UNITS[@]/%/.service}"
 
