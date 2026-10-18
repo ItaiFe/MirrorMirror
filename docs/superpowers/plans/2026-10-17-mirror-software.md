@@ -607,3 +607,21 @@ Commit: `feat: RenikudPlus Hebrew G2P option`
 - [ ] **Step 3:** A plural-address check on generated replies is out of scope (no live LLM in tests). Instead, add `tools/hebrew_address_check.py`, a small script that runs N Hebrew questions against the running llama-server and reports the singular-marker rate, so it can be re-run on the Orin.
 
 Commit: `perf: full SWA cache for English slot; singular-question Hebrew examples`
+
+---
+
+### Task 22: Hebrew-tuned speech recognition (ivrit-ai Whisper turbo) with script-based language detection
+
+**Why (STT experiment, 2026-10-18; `scratchpad/stt/stt.md`):** on 38 synthetic clips, ivrit-ai's Whisper large-v3-turbo fine-tune caught 15–16/16 Hebrew wake phrases (whisper small 8/16) and cut Hebrew WER from 58% to 18%. But it labels English as Hebrew, and sometimes transliterates it ("מיר מיר"). English WER was 27%. Picking the language from the transcript's script scored he 26/26 and en 10/12. With `-ac 768` (15.36 s audio context, matching the VAD's 15 s cap), latency is 1.84 s on the Mac against small's 0.76 s. RSS is about the same (649 vs 631 MB).
+
+**Decision (controller ruling R27):** the Midburn crowd is overwhelmingly Hebrew-speaking, and a missed wake phrase is the worst failure, so ivrit q5_0 becomes the default. Small stays one config line away.
+
+**Files:** `deploy/fetch_models.sh` (download ivrit-ai's official ggml f16 at a pinned revision and quantize to q5_0 with `whisper-quantize`; skip if present), `Makefile` + `deploy/systemd/mirror-stt.service` (`STT_MODEL` env/variable, `-ac 768`), `mirror/stt.py` (language from script), `mirror/wake.py` (matcher tweaks), `tests/test_stt.py`, `tests/test_wake.py`, README (models list, how to switch back).
+
+- [ ] **Language from script:** `script_language(text) -> "he" | "en" | None` counts Hebrew letters (U+05D0–U+05EA) against Latin letters: more Hebrew means `he`, more Latin means `en`, and none means `None` (fall back to the server's language field, mapped as today). `WhisperServerSTT.transcribe` uses the script decision first. Tests: Hebrew text gives he, English gives en, mixed with a Hebrew majority gives he, digits only gives the fallback.
+- [ ] **English replies when the transcript is transliterated:** if `script_language` says `he` but the server reported "english", trust the script, since that means it was transcribed into Hebrew letters. Document this. No other heuristics.
+- [ ] **Wake matcher:** accept the transliterations "מיר"/"מירור"/"מירר" as English-mirror tokens. Lower the per-token similarity threshold for "mirror" to 0.7 (keep the "the mirror is nice" test negative). Allow a third repeated wake token ("mirror mirror mirror …", "מראה מראה מראה") and strip it from the remainder. Tests: "mirer mirror, what…" matches; "מיר מיר, מה…" matches; "mirror mirror mirror who is fairest" gives remainder "who is fairest"; all existing negatives stay negative.
+- [ ] **Server config:** `-ac 768` plus `STT_MODEL` defaulting to `ivrit-turbo-q5_0.bin` in both launchers. Add a test that both launchers carry the same STT flags (like Task 21's LLM test).
+- [ ] **Smoke:** re-run the experiment's harness (`scratchpad/stt/`) against the new defaults, through the app's `WhisperServerSTT` + `match_wake`. Report wake hit rate he/en, language accuracy and latency. Expected: he wakes ≥ 15/16, en language ≥ 10/12.
+
+Commit: `feat: ivrit-ai Whisper turbo STT with script-based language detection`
