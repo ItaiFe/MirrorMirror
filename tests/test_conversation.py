@@ -544,3 +544,129 @@ def test_segments_during_filler_dropped():
     assert p["stt"].calls == 1
     assert p["player"].plays == 2
     assert ctl.state == State.LISTENING
+
+
+# --- mid-reply stalls, partial replies, re-warming ---------------------------------
+
+def test_mid_reply_stall_shows_thinking_until_next_clip():
+    llm = ScriptedLLM(["One.", "Two."], before={1: lambda: threading.Event().wait(0.9)})
+    ctl, p, _ = make([Transcript("mirror mirror who", "en")], llm=llm, tts=TextTTS())
+    ctl.on_segment(SEG)
+    assert played_texts(p["player"]) == ["One.", "Two."]
+    assert p["lights"].states == [State.THINKING, State.SPEAKING, State.THINKING,
+                                  State.SPEAKING, State.LISTENING]
+    assert (State.THINKING, 0.0, "X") in p["face"].msgs[2:]
+
+
+def test_no_thinking_when_next_clip_is_quick():
+    llm = ScriptedLLM(["One.", "Two."], before={1: lambda: threading.Event().wait(0.2)})
+    ctl, p, _ = make([Transcript("mirror mirror who", "en")], llm=llm, tts=TextTTS())
+    ctl.on_segment(SEG)
+    assert p["lights"].states == [State.THINKING, State.SPEAKING, State.LISTENING]
+
+
+def test_spoken_sentences_kept_when_tts_fails_mid_reply():
+    class BrokenOnSecond(TextTTS):
+        def synth_visemes(self, text, lang):
+            if text == "Two.":
+                raise RuntimeError("no voice")
+            return super().synth_visemes(text, lang)
+
+    llm = ScriptedLLM(["One.", "Two.", "Three."])
+    ctl, p, _ = make([Transcript("mirror mirror who", "en"), Transcript("and then?", "en")],
+                     llm=llm, tts=BrokenOnSecond())
+    ctl.on_segment(SEG)
+    assert played_texts(p["player"]) == ["One."]
+    assert ctl.state == State.LISTENING
+    ctl.on_segment(SEG)
+    assert llm.calls[1][0] == [{"role": "user", "content": "who"},
+                               {"role": "assistant", "content": "One."}]
+
+
+def test_spoken_sentences_kept_when_playback_fails_mid_reply():
+    player = FakePlayer()
+    orig = player.play
+
+    def play(samples, sr, on_level):
+        if getattr(samples, "text", None) == "Two.":
+            raise OSError("speaker gone")
+        orig(samples, sr, on_level)
+
+    player.play = play
+    llm = ScriptedLLM(["One.", "Two.", "Three."])
+    ctl, p, _ = make([Transcript("mirror mirror who", "en"), Transcript("and then?", "en")],
+                     llm=llm, tts=TextTTS(), player=player)
+    before = set(threading.enumerate())
+    ctl.on_segment(SEG)
+    assert set(threading.enumerate()) - before == set()
+    assert ctl.state == State.LISTENING
+    ctl.on_segment(SEG)
+    assert llm.calls[1][0][-1] == {"role": "assistant", "content": "One."}
+
+
+class WarmLLM(FakeLLM):
+    def __init__(self, *a, **kw):
+        super().__init__(*a, **kw)
+        self.warmed = []
+        self.done = threading.Event()
+
+    def warm(self, lang):
+        self.warmed.append(lang)
+        self.done.set()
+        return 1.0
+
+
+def _wait_rewarm(ctl):
+    t = ctl._rewarm_thread
+    if t is not None:
+        t.join(2.0)
+
+
+def test_tick_rewarms_idle_language_slot():
+    llm = WarmLLM()
+    ctl, p, clock = make([Transcript("mirror mirror who", "en")], llm=llm)
+    clock.t += 599
+    ctl.tick()
+    _wait_rewarm(ctl)
+    assert llm.warmed == []
+    ctl.on_segment(SEG)  # an English request at t0 + 599
+    clock.t += 2
+    ctl.tick()
+    _wait_rewarm(ctl)
+    assert llm.warmed == ["he"]  # en was used 2 s ago
+    clock.t += 1
+    ctl.tick()
+    _wait_rewarm(ctl)
+    assert llm.warmed == ["he"]  # he was just re-warmed
+    clock.t += 600
+    ctl.tick()
+    _wait_rewarm(ctl)
+    assert sorted(llm.warmed) == ["en", "he", "he"]
+
+
+def test_no_rewarm_while_busy():
+    llm = WarmLLM()
+    holder = {}
+
+    def during():
+        holder["clock"].t += 700
+        holder["ctl"].tick()
+
+    ctl, p, clock = make([Transcript("mirror mirror who", "en")], llm=llm,
+                         player=FakePlayer(during=during))
+    holder.update(ctl=ctl, clock=clock)
+    ctl.on_segment(SEG)
+    _wait_rewarm(ctl)
+    assert llm.warmed == []
+
+
+def test_rewarm_failure_is_logged_not_raised(caplog):
+    class BadWarm(FakeLLM):
+        def warm(self, lang):
+            raise LLMError("down")
+
+    ctl, p, clock = make([], llm=BadWarm())
+    clock.t += 601
+    ctl.tick()
+    _wait_rewarm(ctl)
+    assert "down" in caplog.text

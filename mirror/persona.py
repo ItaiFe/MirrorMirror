@@ -38,6 +38,22 @@ SYSTEM_PROMPT = {
     ),
 }
 
+# Few-shot pairs (visitor -> oracle) that show the plural address and gender
+# agreement the 4B model otherwise slips on. They sit before the world text, so they
+# are part of the cached prompt prefix; keep them short.
+HEBREW_EXAMPLES: list[tuple[str, str]] = [
+    ("מה מחכה לי בעתיד?",
+     "אני רואה שני ירחים נפגשים מעל המדבר, ושניהם מחייכים אליכם. "
+     "מה שאתם נושאים מן העבר יאיר לכם את הדרך קדימה."),
+    ("האם אמצא אהבה?",
+     "שאלו את הרוח שעוברת בין האוהלים, והיא תספר לכם על לב שכבר מחפש אתכם. "
+     "אבל זכרו: חוט אדום נקשר רק בידיים פתוחות."),
+    ("ספר לי חידה.",
+     "מה הולך תמיד קדימה ובכל זאת נושא את כל העבר על גבו? אתם. "
+     "עכשיו שאלו את עצמכם מה תבחרו לקחת איתכם."),
+]
+_EXAMPLES_HEADER_HE = "כך נשמעות התשובות שלך:"
+
 FALLBACK = {
     "en": "The mists are too thick right now. Ask me again in a moment.",
     "he": "הערפל סמיך מדי כרגע. שאלו אותי שוב עוד רגע.",
@@ -110,9 +126,18 @@ def _part_of_day(hour: int) -> int:
 
 
 def system_prompt(lang: str, world: str, now: datetime) -> str:
-    """The oracle prompt, then the world background, then the time line. The time
+    """The oracle prompt (with its few-shot examples, Hebrew only), then the world
+    background, then the time line. The time
     line is last so the long prefix stays identical between requests (llama-server
     reuses its cached prompt prefix)."""
     time_line = _TIME_LINE[lang].format(day=_WEEKDAYS[lang][now.weekday()],
                                         part=_PARTS[lang][_part_of_day(now.hour)])
-    return "\n\n".join(p for p in (SYSTEM_PROMPT[lang], world, time_line) if p)
+    examples = _examples(lang)
+    return "\n\n".join(p for p in (SYSTEM_PROMPT[lang], examples, world, time_line) if p)
+
+
+def _examples(lang: str) -> str:
+    if lang != "he":
+        return ""
+    pairs = "\n".join(f"שאלה: {q}\nתשובה: {a}" for q, a in HEBREW_EXAMPLES)
+    return f"{_EXAMPLES_HEADER_HE}\n{pairs}"

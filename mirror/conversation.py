@@ -15,7 +15,7 @@ import numpy as np
 
 from mirror.config import ConversationConfig
 from mirror.llm import LLMError
-from mirror.persona import FALLBACK
+from mirror.persona import FALLBACK, SYSTEM_PROMPT
 from mirror.states import State
 from mirror.stt import STTError
 from mirror.visemes import rms_shape
@@ -27,6 +27,8 @@ _HISTORY_MAX = 6
 HOP_S = 0.02   # the player reports one mouth level per 20 ms hop
 LEAD_S = 0.05  # show each mouth shape slightly before its sound
 _POLL_S = 0.1  # how often a blocked worker checks whether it was cancelled
+STALL_S = 0.6  # no next sentence this long after one finished -> show THINKING
+REWARM_AFTER_S = 600.0  # re-warm a language's prompt cache after this much idle
 _END = object()  # end of the sentence / clip stream
 
 
@@ -49,6 +51,9 @@ class Controller:
         self._history: list[dict] = []
         self._busy = False
         self._lock = threading.Lock()
+        # Last LLM use per language; voice_main warms both slots before this exists.
+        self._last_llm = {lang: clock() for lang in SYSTEM_PROMPT}
+        self._rewarm_thread: "threading.Thread | None" = None
 
     @property
     def state(self) -> State:
@@ -70,11 +75,29 @@ class Controller:
 
     def tick(self) -> None:
         with self._lock:
-            if self._busy or self._state != State.LISTENING:
+            if self._busy:
                 return
-            if self._clock() >= self._deadline:
+            if self._state == State.LISTENING and self._clock() >= self._deadline:
                 log.info("listening timed out")
                 self._go_idle()
+            self._maybe_rewarm()
+
+    def _maybe_rewarm(self) -> None:
+        """Re-warm, in the background, the prompt cache of each language not used for
+        REWARM_AFTER_S. Called only while not busy."""
+        warm = getattr(self._llm, "warm", None)
+        if warm is None or (self._rewarm_thread is not None
+                            and self._rewarm_thread.is_alive()):
+            return
+        now = self._clock()
+        stale = [lang for lang, t in self._last_llm.items() if now - t > REWARM_AFTER_S]
+        if not stale:
+            return
+        for lang in stale:
+            self._last_llm[lang] = now
+        self._rewarm_thread = threading.Thread(target=_rewarm, args=(warm, stale),
+                                               name="llm-rewarm", daemon=True)
+        self._rewarm_thread.start()
 
     def _handle(self, samples: np.ndarray) -> None:
         try:
@@ -99,6 +122,7 @@ class Controller:
 
     def _answer(self, text: str, lang: str) -> None:
         self._set_state(State.THINKING)
+        self._last_llm[lang] = self._clock()
         cancel = threading.Event()
         sentences: "queue.Queue" = queue.Queue()
         clips: "queue.Queue" = queue.Queue(maxsize=1)  # synthesize one sentence ahead
@@ -134,7 +158,8 @@ class Controller:
 
     def _play_reply(self, lang: str, clips: "queue.Queue") -> str:
         """Play the filler, then each synthesized sentence as it is ready; return the
-        spoken reply. Raises LLMError if no sentence comes (in time)."""
+        spoken reply. Raises LLMError if no sentence comes (in time). A failure after
+        the first sentence was spoken ends the reply with what was spoken."""
         deadline = time.monotonic() + self._first_sentence_timeout_s
         item = None
         if self._fillers is not None and self._cfg.filler_enabled:
@@ -152,17 +177,22 @@ class Controller:
             if item is None:
                 raise LLMError(f"no reply sentence within {self._first_sentence_timeout_s} s")
         spoken: list[str] = []
-        while item is not _END:
-            if isinstance(item, BaseException):
-                if spoken and isinstance(item, LLMError):
-                    log.warning("llm stream failed mid-reply: %s", item)
-                    break
-                raise item
-            sentence, samples, sr, track = item
-            log.info("reply sentence %d (%s): %r", len(spoken) + 1, lang, sentence)
-            self._play_clip(samples, sr, track)
-            spoken.append(sentence)
-            item = clips.get()
+        try:
+            while item is not _END:
+                if isinstance(item, BaseException):
+                    raise item
+                sentence, samples, sr, track = item
+                log.info("reply sentence %d (%s): %r", len(spoken) + 1, lang, sentence)
+                self._play_clip(samples, sr, track)
+                spoken.append(sentence)
+                item = _get(clips, STALL_S)
+                if item is None:  # the next sentence is late: look thoughtful
+                    self._set_state(State.THINKING)
+                    item = clips.get()
+        except Exception as e:
+            if not spoken:
+                raise
+            log.warning("reply broke off after %d sentence(s): %s", len(spoken), e)
         if not spoken:
             raise LLMError("llama-server returned an empty reply")
         return " ".join(spoken)
@@ -238,6 +268,14 @@ class Controller:
         self._state = state
         _guarded(self._lights.set_state, state)
         _guarded(self._face.send, state, 0.0)
+
+
+def _rewarm(warm: Callable, langs: list) -> None:
+    for lang in langs:
+        try:
+            warm(lang)
+        except Exception as e:  # noqa: BLE001 - background best effort
+            log.warning("re-warming the %s prompt cache failed: %s", lang, e)
 
 
 def _get(q: "queue.Queue", timeout: float):

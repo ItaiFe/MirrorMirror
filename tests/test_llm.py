@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 from datetime import datetime
 from unittest.mock import MagicMock, patch
 
@@ -83,7 +84,8 @@ def test_system_prompt_contains_world_and_time():
     assert en.startswith(SYSTEM_PROMPT["en"] + "\n\nWORLD TEXT\n\n")
     assert en.endswith("It is now Thursday night at the burn.")
     he = system_prompt("he", "WORLD TEXT", NOW)
-    assert he.startswith(SYSTEM_PROMPT["he"] + "\n\nWORLD TEXT\n\n")
+    assert he.startswith(SYSTEM_PROMPT["he"] + "\n\n")
+    assert "\n\nWORLD TEXT\n\n" in he
     assert he.endswith("עכשיו חמישי לילה בברן.")
     assert "ענה תמיד בעברית" in SYSTEM_PROMPT["he"]
 
@@ -199,3 +201,86 @@ def test_reply_stream_stops_when_cancelled():
         cancel.set()
         assert list(stream) == []
     resp.__exit__.assert_called()  # the connection was closed
+
+
+# --- prompt cache: slot pinning and warmup ---------------------------------------
+
+def test_requests_pin_a_slot_per_language():
+    from mirror.llm import LANG_SLOTS
+
+    assert LANG_SLOTS == {"en": 0, "he": 1}
+    for lang, slot in LANG_SLOTS.items():
+        with patch("mirror.llm.requests.post", return_value=_sse("Hi.")) as post:
+            list(LlamaServerLLM("http://x", 5).reply_stream([], "hi", lang))
+        body = post.call_args.kwargs["json"]
+        assert body["id_slot"] == slot and body["cache_prompt"] is True
+        with patch("mirror.llm.requests.post", return_value=_ok("Hi.")) as post:
+            LlamaServerLLM("http://x", 5).reply([], "hi", lang)
+        assert post.call_args.kwargs["json"]["id_slot"] == slot
+
+
+def test_warm_sends_full_prompt_and_one_token(caplog):
+    resp = _ok("x")
+    resp.json.return_value["timings"] = {"prompt_ms": 812.5, "prompt_n": 900}
+    with patch("mirror.llm.requests.post", return_value=resp) as post:
+        with caplog.at_level(logging.INFO, logger="mirror.llm"):
+            ms = LlamaServerLLM("http://x", 5, world="W", now=lambda: NOW).warm("he")
+    assert ms == 812.5
+    body = post.call_args.kwargs["json"]
+    assert body["max_tokens"] == 1 and body["id_slot"] == 1 and body["cache_prompt"] is True
+    assert body["messages"] == [
+        {"role": "system", "content": system_prompt("he", "W", NOW)},
+        {"role": "user", "content": "."}]
+    assert "stream" not in body
+    assert "812" in caplog.text
+
+
+def test_warm_failure_raises_llm_error():
+    with patch("mirror.llm.requests.post", side_effect=requests.exceptions.ConnectionError()):
+        with pytest.raises(LLMError):
+            LlamaServerLLM("http://x", 5).warm("en")
+
+
+def test_stream_logs_prompt_timings(caplog):
+    resp = _sse("Hi.")
+    lines = list(resp.iter_lines.return_value)
+    lines.insert(-1, b"data: " + json.dumps(
+        {"choices": [{"delta": {}, "finish_reason": "stop"}],
+         "timings": {"prompt_ms": 123.4, "prompt_n": 7}}).encode())
+    resp.iter_lines.return_value = iter(lines)
+    with patch("mirror.llm.requests.post", return_value=resp):
+        with caplog.at_level(logging.INFO, logger="mirror.llm"):
+            assert list(LlamaServerLLM("http://x", 5).reply_stream([], "hi", "en")) == ["Hi."]
+    assert "123" in caplog.text
+
+
+# --- stage directions across sentences -------------------------------------------
+
+def test_stream_keeps_stage_directions_whole():
+    text = "*leans in. whispers* The stars know. [a long pause. then] Yes."
+    with patch("mirror.llm.requests.post", return_value=_sse(*re.findall(r"\S+\s*", text))):
+        out = list(LlamaServerLLM("http://x", 5).reply_stream([], "hi", "en"))
+    assert out == ["The stars know.", "Yes."]
+    with patch("mirror.llm.requests.post",
+               return_value=_sse("(softly. very softly) Look up. ", "Done.")):
+        out = list(LlamaServerLLM("http://x", 5).reply_stream([], "hi", "en"))
+    assert out[-1] == "Done." and len(out) == 2
+
+
+def test_clean_strips_lone_brackets_and_stars():
+    assert trim_reply("*The stars] know (yes.", 3, 300) == "The stars know yes."
+
+
+# --- Hebrew few-shot examples ------------------------------------------------------
+
+def test_hebrew_prompt_has_plural_examples_before_world():
+    from mirror.persona import HEBREW_EXAMPLES
+
+    assert len(HEBREW_EXAMPLES) == 3
+    he = system_prompt("he", "WORLD", NOW)
+    en = system_prompt("en", "WORLD", NOW)
+    for question, answer in HEBREW_EXAMPLES:
+        assert question in he and answer in he
+        assert answer not in en
+        assert any(w in answer for w in ("אתם", "שאלו", "לכם"))
+        assert he.index(answer) < he.index("WORLD")

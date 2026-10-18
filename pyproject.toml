@@ -36,3 +36,7 @@ testpaths = ["tests"]
 markers = [
     "slow: needs real TTS model files (skips itself when missing)",
 ]
+filterwarnings = [
+    # raised inside torch/transformers when the real MMS model loads; not ours to fix
+    "ignore:`torch.jit.script` is deprecated:FutureWarning",
+]

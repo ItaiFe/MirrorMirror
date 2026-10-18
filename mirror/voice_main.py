@@ -25,7 +25,7 @@ from mirror.config import Config, TtsConfig, load_config
 from mirror.conversation import Controller
 from mirror.fillers import FillerBank
 from mirror.lights import LogLights, WledSerial
-from mirror.llm import LlamaServerLLM
+from mirror.llm import LANG_SLOTS, LlamaServerLLM, LLMError
 from mirror.persona import FILLERS, load_world
 from mirror.states import State
 from mirror.stt import WhisperServerSTT
@@ -194,6 +194,16 @@ def build_hebrew_tts(tts_cfg: TtsConfig):
     raise ValueError(f"unknown tts.he_engine {tts_cfg.he_engine!r} (phonikud | mms)")
 
 
+def warm_llm(llm) -> None:
+    """Load each language's system prompt into its llama-server slot, so the first
+    question is not slowed by a cold prompt. A failure is logged, not fatal."""
+    for lang in LANG_SLOTS:
+        try:
+            llm.warm(lang)
+        except LLMError as e:
+            log.warning("llm warmup (%s) failed: %s", lang, e)
+
+
 def resolve_repo_path(path: str, config_path) -> str:
     """A relative path from the config, resolved against the repo root (the parent
     of the config file's directory); against the working directory without one."""
@@ -243,6 +253,7 @@ def run(cfg: Config, wav_path=None, config_path=None) -> int:
         t0 = time.monotonic()
         fillers.prepare()
         log.info("filler lines ready in %.1f s", time.monotonic() - t0)
+        warm_llm(llm)
         open_output(output, en_tts.sample_rate)
         player = LatencyPlayer(output)
         controller = Controller(stt, llm, tts, player, gate, face, cfg.conversation,

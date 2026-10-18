@@ -2,7 +2,8 @@ import pytest
 
 import mirror.tts
 from mirror.config import TtsConfig
-from mirror.voice_main import build_hebrew_tts, open_output, resolve_repo_path
+from mirror.llm import LLMError
+from mirror.voice_main import build_hebrew_tts, open_output, resolve_repo_path, warm_llm
 
 
 class Recorder:
@@ -127,3 +128,20 @@ def test_shutdown_lights_failure_is_not_fatal(monkeypatch, tmp_path, caplog):
     with caplog.at_level("ERROR", logger="mirror.voice"):
         assert _run_until_vad(monkeypatch, tmp_path, lights, _Shutdown()) == 0
     assert len(lights.states) == 2 and "shutdown lights push failed" in caplog.text
+
+
+def test_warm_llm_warms_both_languages_and_survives_failure(caplog):
+    class LLM:
+        def __init__(self):
+            self.langs = []
+
+        def warm(self, lang):
+            self.langs.append(lang)
+            if lang == "en":
+                raise LLMError("down")
+            return 5.0
+
+    llm = LLM()
+    warm_llm(llm)
+    assert llm.langs == ["en", "he"]
+    assert "down" in caplog.text

@@ -16,8 +16,12 @@ from mirror.persona import system_prompt
 log = logging.getLogger("mirror.llm")
 
 _STAGE_DIRECTIONS = re.compile(r"\*[^*]*\*|\[[^\]]*\]")
+_STRAY_MARKS = re.compile(r"[*\[\]()]")
 _SENTENCE_SPLIT = re.compile(r"(?<=[.!?…])\s+")
 _JOINERS = {"‍", "︎", "️"}  # ZWJ and variation selectors
+# llama-server runs with -np 2: each language keeps its own slot, so its long
+# system prompt stays cached there between requests.
+LANG_SLOTS = {"en": 0, "he": 1}
 _MAX_TOKENS = 120
 _TEMPERATURE = 0.8
 # Errors that mean the request or its streamed response failed (incl. bad JSON shape).
@@ -37,8 +41,10 @@ def _strip_emoji(text: str) -> str:
 
 
 def _clean(text: str) -> str:
-    """Drop stage directions (*smiles*, [winks]) and emoji; collapse whitespace."""
+    """Drop stage directions (*smiles*, [winks]), stray *[]() marks and emoji;
+    collapse whitespace."""
     text = _STAGE_DIRECTIONS.sub(" ", text)
+    text = _STRAY_MARKS.sub("", text)
     text = _strip_emoji(text)
     return " ".join(text.split())
 
@@ -52,6 +58,24 @@ def _cut(text: str, max_chars: int) -> str:
     if space > 0:
         cut = cut[:space]
     return cut.rstrip(" ,;:.!?") + "…"
+
+
+def _unclosed(text: str) -> bool:
+    """True while text has an open *stage direction*, [bracket] or (parenthesis)."""
+    return (text.count("*") % 2 == 1 or text.count("[") > text.count("]")
+            or text.count("(") > text.count(")"))
+
+
+def _pop_sentences(buf: str) -> tuple[list[str], str]:
+    """Complete sentences at the start of buf, and the rest. A sentence end inside an
+    unclosed stage direction or bracket is not a split point."""
+    done, start = [], 0
+    for m in _SENTENCE_SPLIT.finditer(buf):
+        piece = buf[start:m.start()]
+        if not _unclosed(piece):
+            done.append(piece)
+            start = m.end()
+    return done, buf[start:]
 
 
 def trim_reply(text: str, max_sentences: int, max_chars: int) -> str:
@@ -74,14 +98,35 @@ class LlamaServerLLM:
         self._world = world
         self._now = now
 
-    def _body(self, history: list[dict], user_text: str, lang: str) -> dict:
+    def _body(self, history: list[dict], user_text: str, lang: str,
+              max_tokens: int = _MAX_TOKENS) -> dict:
         messages = ([{"role": "system",
                       "content": system_prompt(lang, self._world, self._now())}]
                     + list(history)
                     + [{"role": "user", "content": user_text}])
-        # cache_prompt: llama-server reuses the shared prefix (persona + world) between turns
-        return {"messages": messages, "max_tokens": _MAX_TOKENS,
-                "temperature": _TEMPERATURE, "cache_prompt": True}
+        # cache_prompt + a fixed slot per language: llama-server reuses the shared
+        # prefix (persona + examples + world) between turns
+        return {"messages": messages, "max_tokens": max_tokens,
+                "temperature": _TEMPERATURE, "cache_prompt": True,
+                "id_slot": LANG_SLOTS[lang]}
+
+    def warm(self, lang: str) -> float | None:
+        """Load the language's full system prompt into its slot's cache (one token
+        generated). Returns llama-server's prompt-eval time in ms, if it reports one.
+        Raises LLMError on failure."""
+        try:
+            resp = requests.post(self._endpoint,
+                                 json=self._body([], ".", lang, max_tokens=1),
+                                 timeout=self._timeout_s)
+            resp.raise_for_status()
+            timings = resp.json().get("timings") or {}
+        except _REQUEST_ERRORS as e:
+            raise LLMError(f"llama-server warmup failed: {e}") from e
+        ms = timings.get("prompt_ms")
+        log.info("llm warm (%s): prompt eval %s ms for %s tokens", lang,
+                 f"{ms:.0f}" if isinstance(ms, (int, float)) else "?",
+                 timings.get("prompt_n", "?"))
+        return ms
 
     def reply(self, history: list[dict], user_text: str, lang: str) -> str:
         try:
@@ -158,12 +203,16 @@ class LlamaServerLLM:
                 chunk = json.loads(data)
                 if chunk.get("error"):
                     raise ValueError(f"llama-server error: {chunk['error']}")
+                timings = chunk.get("timings")
+                if timings:
+                    log.info("llm prompt eval (%s): %s ms for %s tokens", lang,
+                             timings.get("prompt_ms"), timings.get("prompt_n"))
                 if not chunk.get("choices"):
                     continue
                 delta = chunk["choices"][0].get("delta", {}).get("content")
                 if not delta:
                     continue
-                *done, buf = _SENTENCE_SPLIT.split(buf + delta)
+                done, buf = _pop_sentences(buf + delta)
                 yield from done
             if buf.strip():
                 yield buf
