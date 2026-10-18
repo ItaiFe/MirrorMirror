@@ -4,10 +4,12 @@ SHELL := /bin/bash
 MODELS ?= models
 VENV := .venv/bin
 CONFIG ?= config/mac.toml
-STT_MODEL ?= $(MODELS)/ggml-small.bin
+# ivrit-ai's Hebrew Whisper turbo (q5_0); back to stock: STT_MODEL=$(MODELS)/ggml-small.bin
+STT_MODEL ?= $(MODELS)/ivrit-turbo-q5_0.bin
 # The oracle's model (the Hebrew bake-off runner-up: LLM_MODEL=$(MODELS)/<gemma-4-E2B gguf>)
 LLM_MODEL ?= $(MODELS)/gemma-3-4b-it-Q4_K_M.gguf
-WHISPER := whisper-server -m $(STT_MODEL) --port 8081
+# -ac 768: a 15.36 s audio context (the VAD caps segments at 15 s), ~2x faster than 1500
+WHISPER := whisper-server -m $(STT_MODEL) -ac 768 --port 8081
 # --swa-full: Gemma 3's sliding-window cache otherwise turns cache_reuse off, and the
 # English slot re-processes ~500 prompt tokens per turn (+~580 MiB KV at -c 8192 -np 2)
 LLAMA := llama-server -m $(LLM_MODEL) --port 8080 -c 8192 -ngl 99 -np 2 --cache-reuse 256 --swa-full

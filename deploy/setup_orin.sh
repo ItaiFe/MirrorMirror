@@ -32,7 +32,7 @@ done
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ME="$(id -un)"
-BIN="$HOME/mirror-bin"          # whisper-server, llama-server (+ their sources in src/)
+BIN="$HOME/mirror-bin"          # whisper-server, whisper-quantize, llama-server (+ sources in src/)
 MODELS="$HOME/mirror-models"    # deploy/fetch_models.sh output
 VENV="$REPO/.venv"
 UNITS="$HOME/.config/systemd/user"
@@ -96,6 +96,8 @@ build_server() {  # build_server NAME GIT_URL REF TARGET
     echo "$ref" > "$stamp"
 }
 build_server whisper.cpp https://github.com/ggml-org/whisper.cpp "$WHISPER_REF" whisper-server
+# fetch_models.sh quantizes the ivrit-ai STT model with it.
+build_server whisper.cpp https://github.com/ggml-org/whisper.cpp "$WHISPER_REF" whisper-quantize
 build_server llama.cpp https://github.com/ggml-org/llama.cpp "$LLAMA_REF" llama-server
 
 step "3/8 Python venv $VENV"
@@ -119,7 +121,8 @@ fi
 sys.exit(v != "1.23.2" and f"onnxruntime {v} installed, 1.23.2 expected")'
 
 step "4/8 models -> $MODELS"
-PYTHON="$VENV/bin/python" "$REPO/deploy/fetch_models.sh" "$MODELS"
+PYTHON="$VENV/bin/python" WHISPER_QUANTIZE="$BIN/whisper-quantize" \
+    "$REPO/deploy/fetch_models.sh" "$MODELS"
 
 step "5/8 systemd user units"
 mkdir -p "$UNITS"

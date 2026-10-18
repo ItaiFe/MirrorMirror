@@ -2,7 +2,8 @@
 # Download every model the mirror needs into MODELS_DIR (run once, online).
 #   deploy/fetch_models.sh MODELS_DIR
 # Files that already exist are skipped; interrupted downloads resume.
-# Set PYTHON to the interpreter that has huggingface_hub (default: python3).
+# Set PYTHON to the interpreter that has huggingface_hub (default: python3), and
+# WHISPER_QUANTIZE to whisper.cpp's quantize tool (default: whisper-quantize on PATH).
 set -euo pipefail
 
 if [ $# -ne 1 ]; then
@@ -11,6 +12,7 @@ if [ $# -ne 1 ]; then
 fi
 DIR="$1"
 PYTHON="${PYTHON:-python3}"
+WHISPER_QUANTIZE="${WHISPER_QUANTIZE:-whisper-quantize}"
 mkdir -p "$DIR"
 
 HF=https://huggingface.co
@@ -25,7 +27,23 @@ fetch() {  # fetch URL FILENAME
     mv "$out.part" "$out"
 }
 
+# Stock multilingual small: the fallback STT model (STT_MODEL=ggml-small.bin).
 fetch "$HF/ggerganov/whisper.cpp/resolve/main/ggml-small.bin" ggml-small.bin
+# The default STT model: ivrit-ai's Hebrew Whisper large-v3-turbo (Apache-2.0), the
+# official ggml export (f16 only) at a pinned revision, quantized here to q5_0.
+# The f16 is deleted once the q5_0 exists.
+IVRIT="$HF/ivrit-ai/whisper-large-v3-turbo-ggml/resolve/2130c78e4a9cb4914cc4df91a1c3031407789705"
+if [ -s "$DIR/ivrit-turbo-q5_0.bin" ]; then
+    echo "skip  ivrit-turbo-q5_0.bin (exists)"
+else
+    command -v "$WHISPER_QUANTIZE" >/dev/null \
+        || { echo "$WHISPER_QUANTIZE not found (brew install whisper-cpp, or set WHISPER_QUANTIZE)" >&2; exit 1; }
+    fetch "$IVRIT/ggml-model.bin" ivrit-turbo-f16.bin
+    echo "quantize ivrit-turbo-f16.bin -> ivrit-turbo-q5_0.bin"
+    "$WHISPER_QUANTIZE" "$DIR/ivrit-turbo-f16.bin" "$DIR/ivrit-turbo-q5_0.bin.part" q5_0
+    mv "$DIR/ivrit-turbo-q5_0.bin.part" "$DIR/ivrit-turbo-q5_0.bin"
+    rm -f "$DIR/ivrit-turbo-f16.bin"
+fi
 fetch "$HF/ggml-org/gemma-3-4b-it-GGUF/resolve/main/gemma-3-4b-it-Q4_K_M.gguf" \
     gemma-3-4b-it-Q4_K_M.gguf
 # Silero VAD pinned to the v5.1.2 tag (master moves).

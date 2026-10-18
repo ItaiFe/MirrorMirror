@@ -5,7 +5,11 @@ from dataclasses import dataclass
 from difflib import SequenceMatcher
 
 _THRESHOLD = 0.75
+# Looser for "mirror" itself: ivrit-ai's Whisper turbo writes "mirer" (0.73).
+_MIRROR_THRESHOLD = 0.7
 _HEBREW_VARIANTS = {"מראה", "מראא", "מרא", "מירא"}
+# English "mirror" transliterated into Hebrew letters by the Hebrew fine-tune.
+_TRANSLITERATED_MIRROR = {"מיר", "מירור", "מירר"}
 _TAILS = (("on", "the", "wall"), ("שעל", "הקיר"), ("על", "הקיר"))
 _HALLUCINATIONS = {"thank you", "thanks for watching", "you", "תודה", "תודה רבה", "תודה שצפיתם"}
 _TAG_RE = re.compile(r"^\s*(\[[^\]]*\]|\([^)]*\))\s*$")
@@ -26,12 +30,13 @@ def normalize(text: str) -> str:
     return " ".join(text.split())
 
 
-def _close(a: str, b: str) -> bool:
-    return SequenceMatcher(None, a, b).ratio() >= _THRESHOLD
+def _close(a: str, b: str, threshold: float = _THRESHOLD) -> bool:
+    return SequenceMatcher(None, a, b).ratio() >= threshold
 
 
 def _is_wake_word(token: str) -> bool:
-    return _close(token, "mirror") or token in _HEBREW_VARIANTS or _close(token, "מראה")
+    return (_close(token, "mirror", _MIRROR_THRESHOLD) or token in _TRANSLITERATED_MIRROR
+            or token in _HEBREW_VARIANTS or _close(token, "מראה"))
 
 
 def is_hallucination(text: str) -> bool:
@@ -48,6 +53,8 @@ def match_wake(text: str) -> "WakeMatch | None":
     if len(tokens) < 2 or not (_is_wake_word(tokens[0]) and _is_wake_word(tokens[1])):
         return None
     rest = tokens[2:]
+    if rest and _is_wake_word(rest[0]):  # "mirror mirror mirror ...": one more is fine
+        rest = rest[1:]
     for tail in _TAILS:
         n = len(tail)
         if len(rest) >= n and all(_close(t, w) for t, w in zip(rest[:n], tail)):

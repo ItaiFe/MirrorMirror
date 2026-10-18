@@ -8,7 +8,7 @@ starts at boot and restarts itself if it crashes:
 
 | Service | What it does |
 |---|---|
-| `mirror-stt` | whisper.cpp server: turns speech into text (Hebrew or English), port 8081 |
+| `mirror-stt` | whisper.cpp server with ivrit-ai's Hebrew Whisper turbo: turns speech into text (Hebrew or English), port 8081 |
 | `mirror-llm` | llama.cpp server with Gemma 3 4B: the oracle's brain, port 8080 |
 | `mirror-voice` | listens to the mic, wakes on "Mirror, mirror" / "מראה מראה", asks the brain, speaks the answer, drives the frame lights and tells the face what to do |
 | `mirror-face` | draws the face full-screen; the LED panels show its top-left 252 x 252 pixels |
@@ -29,7 +29,7 @@ and the frame lights printed to the log.
 uv venv --python 3.11 .venv && uv pip install --python .venv -e '.[dev,hw,tts]'
 # the RenikudPlus Hebrew G2P declares Python >= 3.12 but runs on 3.10/3.11:
 uv pip install --python .venv --no-deps --python-version 3.12 renikud-plus==0.5.0
-make models        # deploy/fetch_models.sh models (whisper small, Gemma 3 4B, Silero, Piper, Phonikud, RenikudPlus, MMS cache)
+make models        # deploy/fetch_models.sh models (ivrit-ai Whisper turbo q5_0, whisper small, Gemma 3 4B, Silero, Piper, Phonikud, RenikudPlus, MMS cache)
 make test
 make servers-mac   # just whisper-server :8081 + llama-server :8080 (Ctrl-C stops both)
 make dev           # servers in background (logs in /tmp/mirror-dev), wait for /health, then face + voice
@@ -39,6 +39,16 @@ Then say "Mirror, mirror on the wall, ..." or "מראה, מראה שעל הקי�
 
 - `make servers-mac` installs `whisper-cpp` and `llama.cpp` with Homebrew if they are missing.
 - `make dev LLM_MODEL=models/other.gguf` swaps the LLM. The face window is 756x756 (252 x 3).
+- Speech recognition is ivrit-ai's Hebrew fine-tune of Whisper large-v3-turbo
+  (`models/ivrit-turbo-q5_0.bin`: `make models` downloads ivrit-ai's official f16 ggml
+  at a pinned revision and quantizes it with `whisper-quantize`), run with `-ac 768`
+  (a 15.36 s audio context: the VAD caps segments at 15 s). It hears the Hebrew wake
+  phrase far better than stock small (15-16/16 vs 8/16 on synthetic clips), but it
+  labels every clip "hebrew", so the reply language comes from the transcript's script
+  (more Hebrew letters than Latin -> Hebrew). English it transliterates into Hebrew
+  letters ("מיר מיר") gets a Hebrew reply. Back to stock small:
+  `make dev STT_MODEL=models/ggml-small.bin`; on the Orin
+  `systemctl --user edit mirror-stt` -> `[Service]` `Environment=STT_MODEL=ggml-small.bin`.
 - `mirror-voice --config config/mac.toml --wav FILE.wav` feeds a WAV through VAD and the
   conversation controller exactly like mic audio (then 1 s of silence), plays the reply and exits.
 - The Hebrew voice is a G2P (RenikudPlus by default, `tts.he_g2p = "renikud"`; Phonikud
@@ -316,7 +326,8 @@ the Orin numbers are what count. Over the 2-4 s target: MMS Hebrew synthesis on 
 synthesizing the whole three-sentence reply before playback are the main costs.
 
 Notes:
-- whisper-server reports the language as a full name (`"language": "hebrew"`).
+- whisper-server reports the language as a full name (`"language": "hebrew"`). The app now decides
+  the language from the transcript's script and uses this field only when there are no letters.
 - MMS reads unvocalized Hebrew poorly: "מראה מראה שעל הקיר" synthesized without niqqud was
   heard by whisper as "מה אמר אש על הקיר" (no wake). With niqqud it woke.
 - The Hebrew voice is now Phonikud + Piper (`tts.he_engine = "phonikud"`; `"mms"` is the

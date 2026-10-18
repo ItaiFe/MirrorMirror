@@ -1,11 +1,15 @@
-# Speech-to-text: whisper.cpp server (multilingual small, CUDA) on 127.0.0.1:8081.
+# Speech-to-text: whisper.cpp server (ivrit-ai's Hebrew Whisper large-v3-turbo, q5_0, CUDA) on 127.0.0.1:8081.
 # A systemd *user* unit; deploy/setup_orin.sh installs it into ~/.config/systemd/user/.
 [Unit]
 Description=Mirror, Mirror: whisper-server (speech to text)
 StartLimitIntervalSec=0
 
 [Service]
-ExecStart=%h/mirror-bin/whisper-server -m %h/mirror-models/ggml-small.bin --host 127.0.0.1 --port 8081
+# The model file in ~/mirror-models; back to stock multilingual small:
+# systemctl --user edit mirror-stt  ->  [Service] Environment=STT_MODEL=ggml-small.bin
+Environment=STT_MODEL=ivrit-turbo-q5_0.bin
+# -ac 768: a 15.36 s audio context (the VAD caps segments at 15 s), ~2x faster than 1500
+ExecStart=%h/mirror-bin/whisper-server -m %h/mirror-models/${STT_MODEL} -ac 768 --host 127.0.0.1 --port 8081
 Restart=always
 RestartSec=2
 
