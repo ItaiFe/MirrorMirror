@@ -7,7 +7,7 @@ CONFIG ?= config/mac.toml
 STT_MODEL ?= $(MODELS)/ggml-small.bin
 LLM_MODEL ?= $(MODELS)/gemma-3-4b-it-Q4_K_M.gguf
 WHISPER := whisper-server -m $(STT_MODEL) --port 8081
-LLAMA := llama-server -m $(LLM_MODEL) --port 8080 -c 4096 -ngl 99 -np 2 --cache-reuse 256
+LLAMA := llama-server -m $(LLM_MODEL) --port 8080 -c 8192 -ngl 99 -np 2 --cache-reuse 256
 LOGS ?= /tmp/mirror-dev
 
 test:

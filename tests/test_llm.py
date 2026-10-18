@@ -264,11 +264,19 @@ def test_stream_keeps_stage_directions_whole():
     with patch("mirror.llm.requests.post",
                return_value=_sse("(softly. very softly) Look up. ", "Done.")):
         out = list(LlamaServerLLM("http://x", 5).reply_stream([], "hi", "en"))
-    assert out[-1] == "Done." and len(out) == 2
+    assert out == ["Look up.", "Done."]
 
 
 def test_clean_strips_lone_brackets_and_stars():
     assert trim_reply("*The stars] know (yes.", 3, 300) == "The stars know yes."
+    assert trim_reply("(sighs) The stars (and the moon) know.", 3, 300) == "The stars know."
+
+
+def test_clean_strips_copied_answer_label():
+    assert trim_reply("תשובה: אני רואה אתכם.", 3, 300) == "אני רואה אתכם."
+    assert trim_reply("Answer: The stars know.", 3, 300) == "The stars know."
+    with patch("mirror.llm.requests.post", return_value=_sse("תשובה:", " שאלו שוב.")):
+        assert list(LlamaServerLLM("http://x", 5).reply_stream([], "hi", "he")) == ["שאלו שוב."]
 
 
 # --- Hebrew few-shot examples ------------------------------------------------------
@@ -284,3 +292,5 @@ def test_hebrew_prompt_has_plural_examples_before_world():
         assert answer not in en
         assert any(w in answer for w in ("אתם", "שאלו", "לכם"))
         assert he.index(answer) < he.index("WORLD")
+    assert len({a.split()[0] for _, a in HEBREW_EXAMPLES}) == 3  # varied openings
+    assert "רק את הטון" in he  # the examples are not to be copied

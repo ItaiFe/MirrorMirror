@@ -29,6 +29,8 @@ LEAD_S = 0.05  # show each mouth shape slightly before its sound
 _POLL_S = 0.1  # how often a blocked worker checks whether it was cancelled
 STALL_S = 0.6  # no next sentence this long after one finished -> show THINKING
 REWARM_AFTER_S = 600.0  # re-warm a language's prompt cache after this much idle
+REWARM_RETRY_S = 30.0  # after a failed re-warm, try again this much later
+REWARM_WAIT_S = 0.5  # how long an answer waits for an in-flight re-warm
 _END = object()  # end of the sentence / clip stream
 
 
@@ -51,9 +53,24 @@ class Controller:
         self._history: list[dict] = []
         self._busy = False
         self._lock = threading.Lock()
-        # Last LLM use per language; voice_main warms both slots before this exists.
+        # Last LLM use per language; voice_main warms both slots before this exists
+        # and marks a language whose warmup failed with mark_unwarmed().
         self._last_llm = {lang: clock() for lang in SYSTEM_PROMPT}
         self._rewarm_thread: "threading.Thread | None" = None
+        self._closed = threading.Event()
+
+    def mark_unwarmed(self, lang: str) -> None:
+        """The language's prompt cache is cold: re-warm it at the next idle tick."""
+        self._last_llm[lang] = float("-inf")
+
+    def close(self, timeout_s: float = 1.0) -> None:
+        """Start no more re-warms and wait (bounded) for one in flight."""
+        self._closed.set()
+        t = self._rewarm_thread
+        if t is not None:
+            t.join(timeout_s)
+            if t.is_alive():
+                log.warning("prompt-cache re-warm still running at shutdown")
 
     @property
     def state(self) -> State:
@@ -83,21 +100,31 @@ class Controller:
             self._maybe_rewarm()
 
     def _maybe_rewarm(self) -> None:
-        """Re-warm, in the background, the prompt cache of each language not used for
-        REWARM_AFTER_S. Called only while not busy."""
+        """Re-warm, in the background, the prompt cache of the language idle longest,
+        if that is more than REWARM_AFTER_S. One language at a time, so a question
+        never waits behind more than one short warm request. Called only while not
+        busy."""
         warm = getattr(self._llm, "warm", None)
-        if warm is None or (self._rewarm_thread is not None
-                            and self._rewarm_thread.is_alive()):
+        if (warm is None or self._closed.is_set()
+                or (self._rewarm_thread is not None and self._rewarm_thread.is_alive())):
             return
         now = self._clock()
-        stale = [lang for lang, t in self._last_llm.items() if now - t > REWARM_AFTER_S]
-        if not stale:
+        lang = min(self._last_llm, key=self._last_llm.get)
+        if now - self._last_llm[lang] <= REWARM_AFTER_S:
             return
-        for lang in stale:
-            self._last_llm[lang] = now
-        self._rewarm_thread = threading.Thread(target=_rewarm, args=(warm, stale),
+        self._last_llm[lang] = now
+        self._rewarm_thread = threading.Thread(target=self._rewarm, args=(warm, lang),
                                                name="llm-rewarm", daemon=True)
         self._rewarm_thread.start()
+
+    def _rewarm(self, warm: Callable, lang: str) -> None:
+        if self._closed.is_set():
+            return
+        try:
+            warm(lang)
+        except Exception as e:  # noqa: BLE001 - background best effort
+            log.warning("re-warming the %s prompt cache failed: %s", lang, e)
+            self._last_llm[lang] = self._clock() - REWARM_AFTER_S + REWARM_RETRY_S
 
     def _handle(self, samples: np.ndarray) -> None:
         try:
@@ -123,6 +150,7 @@ class Controller:
     def _answer(self, text: str, lang: str) -> None:
         self._set_state(State.THINKING)
         self._last_llm[lang] = self._clock()
+        self._wait_for_rewarm()
         cancel = threading.Event()
         sentences: "queue.Queue" = queue.Queue()
         clips: "queue.Queue" = queue.Queue(maxsize=1)  # synthesize one sentence ahead
@@ -155,6 +183,16 @@ class Controller:
                               {"role": "assistant", "content": reply}])
         self._history = self._history[-_HISTORY_MAX:]
         self._listen(self._cfg.followup_s)
+
+    def _wait_for_rewarm(self) -> None:
+        """Let an in-flight re-warm finish (bounded) so the question does not queue
+        behind it on the server."""
+        t = self._rewarm_thread
+        if t is None or not t.is_alive():
+            return
+        t.join(REWARM_WAIT_S)
+        if t.is_alive():
+            log.info("prompt-cache re-warm still running; asking anyway")
 
     def _play_reply(self, lang: str, clips: "queue.Queue") -> str:
         """Play the filler, then each synthesized sentence as it is ready; return the
@@ -192,7 +230,8 @@ class Controller:
         except Exception as e:
             if not spoken:
                 raise
-            log.warning("reply broke off after %d sentence(s): %s", len(spoken), e)
+            log.warning("reply broke off after %d sentence(s): %s", len(spoken), e,
+                        exc_info=not isinstance(e, LLMError))
         if not spoken:
             raise LLMError("llama-server returned an empty reply")
         return " ".join(spoken)
@@ -268,14 +307,6 @@ class Controller:
         self._state = state
         _guarded(self._lights.set_state, state)
         _guarded(self._face.send, state, 0.0)
-
-
-def _rewarm(warm: Callable, langs: list) -> None:
-    for lang in langs:
-        try:
-            warm(lang)
-        except Exception as e:  # noqa: BLE001 - background best effort
-            log.warning("re-warming the %s prompt cache failed: %s", lang, e)
 
 
 def _get(q: "queue.Queue", timeout: float):

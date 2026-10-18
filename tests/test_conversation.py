@@ -638,10 +638,13 @@ def test_tick_rewarms_idle_language_slot():
     ctl.tick()
     _wait_rewarm(ctl)
     assert llm.warmed == ["he"]  # he was just re-warmed
-    clock.t += 600
+    clock.t += 600  # both stale now: one language per re-warm, the stalest first
     ctl.tick()
     _wait_rewarm(ctl)
-    assert sorted(llm.warmed) == ["en", "he", "he"]
+    assert llm.warmed == ["he", "en"]
+    ctl.tick()
+    _wait_rewarm(ctl)
+    assert llm.warmed == ["he", "en", "he"]
 
 
 def test_no_rewarm_while_busy():
@@ -665,8 +668,88 @@ def test_rewarm_failure_is_logged_not_raised(caplog):
         def warm(self, lang):
             raise LLMError("down")
 
-    ctl, p, clock = make([], llm=BadWarm())
-    clock.t += 601
+    llm = BadWarm()
+    llm.tries = []
+    llm.warm = lambda lang: (llm.tries.append(lang), BadWarm.warm(llm, lang))
+    ctl, p, clock = make([], llm=llm)
+    ctl.mark_unwarmed("he")  # e.g. llama-server was still loading at start-up
     ctl.tick()
     _wait_rewarm(ctl)
     assert "down" in caplog.text
+    assert llm.tries == ["he"]
+    clock.t += 29
+    ctl.tick()
+    _wait_rewarm(ctl)
+    assert llm.tries == ["he"]
+    clock.t += 2  # retried REWARM_RETRY_S after the failure
+    ctl.tick()
+    _wait_rewarm(ctl)
+    assert llm.tries == ["he", "he"]
+
+
+def test_unwarmed_language_is_warmed_at_first_idle_tick():
+    llm = WarmLLM()
+    ctl, p, clock = make([], llm=llm)
+    ctl.mark_unwarmed("he")
+    ctl.tick()
+    _wait_rewarm(ctl)
+    assert llm.warmed == ["he"]
+    ctl.tick()
+    _wait_rewarm(ctl)
+    assert llm.warmed == ["he"]
+
+
+class SlowWarmLLM(FakeLLM):
+    def __init__(self, warm_s, *a, **kw):
+        super().__init__(*a, **kw)
+        self.warm_s = warm_s
+        self.events = []
+
+    def warm(self, lang):
+        self.events.append(("warm start", lang))
+        threading.Event().wait(self.warm_s)
+        self.events.append(("warm end", lang))
+
+    def reply(self, history, user_text, lang):
+        self.events.append(("reply", lang))
+        return super().reply(history, user_text, lang)
+
+
+def test_answer_waits_for_inflight_rewarm():
+    llm = SlowWarmLLM(0.2)
+    ctl, p, clock = make([Transcript("mirror mirror who", "en")], llm=llm)
+    ctl.mark_unwarmed("en")
+    ctl.tick()  # re-warm of en starts in the background
+    ctl.on_segment(SEG)
+    assert llm.events == [("warm start", "en"), ("warm end", "en"), ("reply", "en")]
+
+
+def test_answer_waits_for_rewarm_only_briefly(caplog):
+    import logging
+    import time
+
+    llm = SlowWarmLLM(1.5)
+    ctl, p, clock = make([Transcript("mirror mirror who", "en")], llm=llm)
+    ctl.mark_unwarmed("en")
+    ctl.tick()
+    t = time.monotonic()
+    with caplog.at_level(logging.INFO, logger="mirror.conversation"):
+        ctl.on_segment(SEG)
+    assert time.monotonic() - t < 1.2
+    assert llm.events[:2] == [("warm start", "en"), ("reply", "en")]
+    assert "still running" in caplog.text
+    ctl.close(timeout_s=2.0)
+
+
+def test_close_joins_rewarm_and_stops_new_ones():
+    llm = SlowWarmLLM(0.3)
+    ctl, p, clock = make([], llm=llm)
+    ctl.mark_unwarmed("en")
+    ctl.tick()
+    thread = ctl._rewarm_thread
+    ctl.close(timeout_s=2.0)
+    assert not thread.is_alive()
+    assert llm.events == [("warm start", "en"), ("warm end", "en")]
+    clock.t += 10_000
+    ctl.tick()
+    assert ctl._rewarm_thread is thread  # no new re-warm after close

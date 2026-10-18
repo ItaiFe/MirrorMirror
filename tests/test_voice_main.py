@@ -142,6 +142,6 @@ def test_warm_llm_warms_both_languages_and_survives_failure(caplog):
             return 5.0
 
     llm = LLM()
-    warm_llm(llm)
+    assert warm_llm(llm) == ["en"]
     assert llm.langs == ["en", "he"]
     assert "down" in caplog.text

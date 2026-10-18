@@ -194,14 +194,18 @@ def build_hebrew_tts(tts_cfg: TtsConfig):
     raise ValueError(f"unknown tts.he_engine {tts_cfg.he_engine!r} (phonikud | mms)")
 
 
-def warm_llm(llm) -> None:
+def warm_llm(llm) -> list:
     """Load each language's system prompt into its llama-server slot, so the first
-    question is not slowed by a cold prompt. A failure is logged, not fatal."""
+    question is not slowed by a cold prompt. A failure is logged, not fatal; returns
+    the languages that failed (the controller re-warms them when idle)."""
+    failed = []
     for lang in LANG_SLOTS:
         try:
             llm.warm(lang)
         except LLMError as e:
             log.warning("llm warmup (%s) failed: %s", lang, e)
+            failed.append(lang)
+    return failed
 
 
 def run(cfg: Config, wav_path=None, config_path=None) -> int:
@@ -225,6 +229,7 @@ def run(cfg: Config, wav_path=None, config_path=None) -> int:
     raw_lights = (WledSerial(cfg.lights.serial_port, cfg.lights.baud)
                   if cfg.lights.kind == "wled" else LogLights())
     output = Player(find_device(cfg.audio.output_device, "output"))
+    controller = None
     try:
         _push_idle(raw_lights, face)
         gate = AnswerGate(raw_lights)
@@ -244,12 +249,14 @@ def run(cfg: Config, wav_path=None, config_path=None) -> int:
         t0 = time.monotonic()
         fillers.prepare()
         log.info("filler lines ready in %.1f s", time.monotonic() - t0)
-        warm_llm(llm)
+        unwarmed = warm_llm(llm)
         open_output(output, en_tts.sample_rate)
         player = LatencyPlayer(output)
         controller = Controller(stt, llm, tts, player, gate, face, cfg.conversation,
                                 fillers=fillers,
                                 first_sentence_timeout_s=cfg.servers.timeout_s)
+        for lang in unwarmed:
+            controller.mark_unwarmed(lang)
 
         if wav_path:
             source = WavSource(wav_path, cfg.audio.sample_rate)
@@ -299,6 +306,9 @@ def run(cfg: Config, wav_path=None, config_path=None) -> int:
         return 0
     finally:
         stop.set()
+        if controller is not None:
+            with contextlib.suppress(Exception):
+                controller.close()  # waits (bounded) for a background re-warm
         _lights_to_idle(raw_lights)
         face.close()
         with contextlib.suppress(Exception):

@@ -15,7 +15,9 @@ from mirror.persona import system_prompt
 
 log = logging.getLogger("mirror.llm")
 
-_STAGE_DIRECTIONS = re.compile(r"\*[^*]*\*|\[[^\]]*\]")
+_STAGE_DIRECTIONS = re.compile(r"\*[^*]*\*|\[[^\]]*\]|\([^)]*\)")
+# A reply that copies the few-shot format ("תשובה: ...", "Answer: ...")
+_ANSWER_LABEL = re.compile(r"^\s*(?:תשובה|answer)\s*:\s*", re.IGNORECASE)
 _STRAY_MARKS = re.compile(r"[*\[\]()]")
 _SENTENCE_SPLIT = re.compile(r"(?<=[.!?…])\s+")
 _JOINERS = {"‍", "︎", "️"}  # ZWJ and variation selectors
@@ -41,8 +43,9 @@ def _strip_emoji(text: str) -> str:
 
 
 def _clean(text: str) -> str:
-    """Drop stage directions (*smiles*, [winks]), stray *[]() marks and emoji;
-    collapse whitespace."""
+    """Drop an "Answer:" label, stage directions (*smiles*, [winks], (sighs)), stray
+    *[]() marks and emoji; collapse whitespace."""
+    text = _ANSWER_LABEL.sub("", text)
     text = _STAGE_DIRECTIONS.sub(" ", text)
     text = _STRAY_MARKS.sub("", text)
     text = _strip_emoji(text)
