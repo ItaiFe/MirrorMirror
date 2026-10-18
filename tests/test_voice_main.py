@@ -396,11 +396,26 @@ class FakePiper(Recorder):
     sample_rate = 22050
 
 
+class _PocketView:
+    def __init__(self, lang, fail=False):
+        self.lang, self.fail, self.texts = lang, fail, []
+
+    def __eq__(self, other):
+        return other == ("view", self.lang)
+
+    def synth(self, text):
+        self.texts.append(text)
+        if self.fail:
+            raise RuntimeError("onnxruntime: bad graph")
+        return np.zeros(240, np.float32), 24000
+
+
 class FakePocket(Recorder):
     sample_rate = 24000
+    fail_synth = False
 
     def for_lang(self, lang):
-        return ("view", lang)
+        return _PocketView(lang, self.fail_synth)
 
 
 def _stub_piper_stack(monkeypatch):
@@ -486,3 +501,27 @@ def test_build_tts_unknown_engine():
 
     with pytest.raises(ValueError, match="engine"):
         build_tts(TtsConfig(engine="espeak"))
+
+
+def test_build_tts_pocket_is_warmed_inside_the_fallback(monkeypatch):
+    from mirror.voice_main import build_tts
+
+    _stub_piper_stack(monkeypatch)
+    monkeypatch.setattr(mirror.tts, "PocketTTS", FakePocket)
+    router, _, engine = build_tts(TtsConfig(engine="pocket"))
+    assert engine == "pocket" and router._en.texts and router._he.texts  # en + he synth ran
+
+
+def test_build_tts_pocket_synth_failure_falls_back_to_piper(monkeypatch, caplog):
+    from mirror.voice_main import build_tts
+
+    class LoadsButCannotSpeak(FakePocket):
+        fail_synth = True
+
+    _stub_piper_stack(monkeypatch)
+    monkeypatch.setattr(mirror.tts, "PocketTTS", LoadsButCannotSpeak)
+    with caplog.at_level("WARNING", logger="mirror.voice"):
+        router, rate, engine = build_tts(TtsConfig(engine="pocket"))
+    assert engine == "piper" and rate == 22050 and isinstance(router._en, FakePiper)
+    assert any(r.levelname == "WARNING" and "pocket" in r.getMessage().lower()
+               for r in caplog.records)

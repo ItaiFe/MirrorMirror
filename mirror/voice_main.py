@@ -291,8 +291,8 @@ FILLER_BUDGET_S = 2.5  # persona.py's filler length; Pocket voices can run past 
 
 def build_tts(tts_cfg: TtsConfig):
     """(router, sample rate, engine) for tts.engine. "pocket" loads Pocket TTS for both
-    languages (Hebrew through RenikudPlus IPA); if that fails it logs a WARNING and
-    falls back to the piper stack."""
+    languages (Hebrew through RenikudPlus IPA) and warms it up; if loading or the
+    warmup fails it logs a WARNING and falls back to the piper stack."""
     from mirror import tts
 
     if tts_cfg.engine not in ("piper", "pocket"):
@@ -304,8 +304,9 @@ def build_tts(tts_cfg: TtsConfig):
             pocket = tts.PocketTTS(tts_cfg.pocket_model, voice=tts_cfg.pocket_voice,
                                    voice_file=tts_cfg.pocket_voice_file,
                                    threads=tts_cfg.pocket_threads, g2p=g2p)
-            return (tts.TTSRouter(pocket.for_lang("en"), pocket.for_lang("he")),
-                    pocket.sample_rate, "pocket")
+            router = tts.TTSRouter(pocket.for_lang("en"), pocket.for_lang("he"))
+            router.warmup()  # one short line per language: a model that loads but
+            return router, pocket.sample_rate, "pocket"  # can't speak falls back too
         except Exception as e:
             log.warning("Pocket TTS (%s) failed to load (%s: %s); falling back to piper",
                         tts_cfg.pocket_model, type(e).__name__, e)

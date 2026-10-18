@@ -121,8 +121,17 @@ fi
 # and unused/too-new dependencies; it runs on 3.10 with what the pocket extra pins. Pinned
 # to a commit, installed without its dependency checks (see pyproject.toml).
 POCKET_SHA=9860fc0fe0ee5ffb13a4bae2fb99e9bd913acbe5
-"$VENV/bin/pip" show pocket-tts-onnx >/dev/null 2>&1 ||
-    "$VENV/bin/pip" install --no-deps --ignore-requires-python \
+# Reinstall unless the installed copy came from exactly this commit (pip records it in
+# the dist-info's direct_url.json), so a re-run moves an old install to POCKET_SHA.
+POCKET_INSTALLED=$("$VENV/bin/python" -c 'import json
+from importlib.metadata import distribution, PackageNotFoundError
+try:
+    url = distribution("pocket-tts-onnx").read_text("direct_url.json")
+    print(json.loads(url or "{}").get("vcs_info", {}).get("commit_id", ""))
+except PackageNotFoundError:
+    pass')
+[ "$POCKET_INSTALLED" = "$POCKET_SHA" ] ||
+    "$VENV/bin/pip" install --force-reinstall --no-deps --ignore-requires-python \
         "pocket-tts-onnx @ git+https://github.com/thewh1teagle/pocket-tts-onnx@$POCKET_SHA"
 "$VENV/bin/python" -c 'import onnxruntime, sys; v = onnxruntime.__version__
 sys.exit(v != "1.23.2" and f"onnxruntime {v} installed, 1.23.2 expected")'

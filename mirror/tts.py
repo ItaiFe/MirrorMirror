@@ -421,6 +421,8 @@ class PocketTTS:
                       ) -> tuple[np.ndarray, int, VisemeTrack | None]:
         text = " ".join(text.split())
         if lang == "he":
+            if self._g2p is None:
+                raise ValueError("PocketTTS: Hebrew needs a G2P (g2p=RenikudG2P(...))")
             ipa = self._g2p.ipa(text) if text else ""
             model_input, phonemes = ipa, True
         else:

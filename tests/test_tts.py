@@ -641,3 +641,13 @@ def test_pocket_truncation_check_ignores_silence(monkeypatch):
     monkeypatch.setattr(tts._model, "create", lambda *a, **k: (takes.pop(0), POCKET_SR))
     audio, sr = tts.synth("Hmm. The mists are parting.", "en")
     assert takes == [] and len(audio) / sr > 1.5
+
+
+def test_pocket_hebrew_without_g2p_is_a_clear_error(monkeypatch):
+    _fake_pocket(monkeypatch)
+    from mirror.tts import PocketTTS
+
+    tts = PocketTTS("m.onnx", g2p=None, en_ipa=None)
+    assert len(tts.synth("Hello there.", "en")[0]) > 0  # English needs no G2P
+    with pytest.raises(ValueError, match="G2P"):
+        tts.synth("שלום", "he")
