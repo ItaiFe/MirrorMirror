@@ -394,3 +394,186 @@ Units: all `Restart=always`, `RestartSec=2`. `mirror-voice` has `After=mirror-st
 - [ ] **Step 2: Write the README**: Mac quickstart (`make servers-mac`, `make dev`), Orin deploy (`git pull && deploy/setup_orin.sh`), the NovaLCT setup steps (Windows laptop over USB-B, 252×252 at (0,0), save to the receiving card), the WLED preset table from Task 8, and the bench test checklist from the brief's build order
 - [ ] **Step 3: On the Orin (once the hardware is in hand): reboot.** Expected: the face appears on the panels within 90 s, and "Mirror mirror" gets an answer in both languages. `tegrastats` during an answer shows RAM under 7 GB.
 - [ ] **Step 4: Commit** `feat: orin deployment`
+
+---
+
+### Task 13: Hebrew voice via Phonikud + Piper (replaces MMS)
+
+**Why:** MMS reads unvocalized Hebrew badly and is slow on CPU (7–9 s for three sentences on the Mac). Phonikud adds full Hebrew phonetics (vowels and stress, as IPA) to plain Hebrew text, and a Piper voice trained on those phonemes speaks it. Both are small ONNX models that run on CPU, offline.
+
+**Files:**
+- Modify: `mirror/tts.py` (add `PhonikudHebrewTTS`; keep `MmsHebrewTTS` as a fallback class), `mirror/config.py` + `config/*.toml` (`tts.he_engine = "phonikud"|"mms"`, Phonikud model paths), `mirror/voice_main.py` (build the configured Hebrew engine), `deploy/fetch_models.sh` (download the Phonikud and Hebrew Piper models), `pyproject.toml` (deps)
+- Test: `tests/test_tts.py`
+
+**Interfaces:**
+- Produces: `PhonikudHebrewTTS(phonikud_model: str, voice_model: str, voice_config: str | None = None)` implementing `Synth.synth(text) -> (np.ndarray, int)`. It runs text → Phonikud (adds diacritics/phonetic marks) → IPA phonemes → Piper ONNX voice → audio.
+- `TTSRouter` is unchanged; `voice_main` passes the configured Hebrew engine as `he=`.
+
+- [ ] **Step 1: Find the real packages and models.** Expected: the Phonikud G2P (pip `phonikud` / `phonikud-onnx` and its ONNX model) and a Hebrew Piper checkpoint (HF `Phonikud/phonikud-tts-checkpoints` or the maintainers' Piper ONNX exports), plus how phonemes are fed to the voice (piper's phoneme-input API or `piper-onnx`). Record the URLs, versions and licenses in the report.
+- [ ] **Step 2: Write failing tests.** Fast test (no models): `TTSRouter` with `he=` set to a fake still routes `he`. A `@pytest.mark.slow` test `test_phonikud_real` is skipped unless the models are present; it synthesizes "מראה מראה שעל הקיר, מי הכי יפה?" and asserts more than 0.5 s of float32 mono audio at the voice's sample rate.
+- [ ] **Step 3: Implement** `PhonikudHebrewTTS`. Imports are lazy and models load once in `__init__`. Prefer onnxruntime on CPU, so the GPU stays free for the LLM.
+- [ ] **Step 4: Run tests.** Expected: all pass, and the slow test passes on the Mac with models downloaded.
+- [ ] **Step 5: Smoke + timing.** Run `mirror-voice --wav` with the Hebrew WAV (generate it with the new voice), measure synth time for a 3-sentence reply against MMS, and listen-check one output, saving it to the scratchpad.
+- [ ] **Step 6: Commit** `feat: Phonikud Hebrew voice`
+
+---
+
+## Sprite-bank face (Tasks 14–17)
+
+**Why:** the user chose the layered 2D sprite bank from the avatar research (`reports/Offline talking avatar options.md`, doc https://claude.ai/artifact/QsoJqX5tKrDjg3NMgvGZwz). The look is a sculpted bronze trickster face on pure black. The art is made offline from one AI image, and the Orin composites it on the CPU only. The GPU stays with the LLM.
+
+**Shared decisions:**
+- Mouth shapes: Rhubarb set `A B C D E F G H X` (A closed p/b/m · B clenched, most consonants incl. Hebrew ʁ χ · C open e/ɛ · D wide a · E rounded o · F puckered u/w · G f/v · H l · X rest), each with `mild` and `wide` variants.
+- The face bus message gains a viseme: `{"s": state, "m": mouth, "v": "D"}`. `FaceBus.send(state, mouth, viseme="X")` and `poll() -> (State, float, str)`. Old senders without `v` mean `"X"`.
+- Assets live in `assets/face/<bank-name>/`, which is git-tracked for small banks. `config.face.renderer = "sprite" | "procedural"` and `config.face.bank = "assets/face/<name>"`.
+- Until the real LivePortrait assets exist, a **stub bank** generated from one image by warps alone keeps everything running end to end.
+
+### Task 14: Viseme timeline from Piper phoneme alignments
+
+**Files:** Create `mirror/visemes.py`. Modify `mirror/tts.py` (alignment-capable synth), `mirror/bus.py` (viseme field), `mirror/conversation.py` (forward visemes) and `mirror/face/app.py` (accept the 3-tuple from `poll`). Test `tests/test_visemes.py`, update `tests/test_bus.py`, `tests/test_conversation.py` and `tests/test_tts.py`.
+
+**Interfaces:**
+- `PHONEME_TO_SHAPE: dict[str, str]`, IPA phoneme → shape letter. Unknown phonemes map to `B`, pauses and silence to `X`.
+- `@dataclass VisemeTrack(times: np.ndarray, shapes: list[str])`, with times = shape start seconds, sorted. `at(t: float) -> str` returns the shape in effect at `t`, or `"X"` outside the track.
+- `track_from_alignments(alignments: list[tuple[str, int]], sr: int, total_samples: int) -> VisemeTrack`. Rescales the summed phoneme samples to `total_samples` (fixes Piper's ~25% short durations) and merges consecutive identical shapes. Enforces a minimum hold of 2 frames at 30 fps (≈0.067 s) by absorbing shorter segments into the previous one. Inserts `B` between `A` and `D` when they are adjacent.
+- `TTSRouter.synth_visemes(text, lang) -> tuple[np.ndarray, int, VisemeTrack | None]`. Engines that can align (Piper and the Phonikud/Piper Hebrew voice, if Task 13's report says alignments work) return a track, MMS returns `None`. `synth()` stays as is.
+- Controller: speak via `synth_visemes`. In `on_level` at hop k, t = k × 0.02 s + 0.05 s lead, and it sends `face.send(SPEAKING, level, track.at(t) if track else rms_shape(level))`, where `rms_shape(level)` gives `X` <0.08, `B` <0.35, `C` <0.65, else `D`.
+
+**Tests (names + assertions):**
+- `test_rescale_to_audio_length`: alignments summing to 750 samples with `total_samples=1000` give a final segment ending at 1000/sr
+- `test_merge_and_min_hold`: `[("p",300),("a",4000),("a",1000),("t",100),("o",3000)]` at 22050 Hz gives shapes `["A","D","E"]` (the 100-sample `t` is absorbed)
+- `test_insert_b_between_a_and_d`: `[("m",3000),("a",3000)]` gives `["A","B","D"]` with B lasting ≥ 1 frame
+- `test_hebrew_phonemes`: `ʁ` and `χ` map to `B`
+- `test_bus_viseme_roundtrip` and `test_bus_old_message_defaults_x`
+- `test_controller_forwards_visemes`: a fake TTS returns a track `[0:"X", 0.1:"D"]`; at hop 5 (t=0.15 s incl. lead) the face receives `(SPEAKING, level, "D")`
+- `test_controller_rms_fallback_when_no_track`
+- `@slow test_piper_alignments_real`: the real English Piper voice with `include_alignments=True` returns a track covering ≥ 90% of the audio duration
+
+Commit: `feat: viseme timeline from piper alignments`
+
+### Task 15: Face asset bank format and loader
+
+**Files:** Create `mirror/face/bank.py` and `assets/face/README.md` (the format spec). Test `tests/test_face_bank.py` with a tiny synthetic bank built in `tmp_path`.
+
+**Format** (`<bank>/manifest.json` plus PNG/NPY files, all 252×252 coordinates):
+```json
+{"size": 252,
+ "hub": "hub.png", "mask": "mask.png",
+ "mouth": {"box": [x, y, w, h], "patches": {"A_mild": "mouth/A_mild.png", "...": "..."}},
+ "eyes": {"box_left": [...], "box_right": [...], "patches": {"open": "...", "half": "...", "closed": "...", "look_up": "..."}},
+ "expressions": {"smirk": "expr/smirk.png", "squint": "...", "brows_up": "..."},
+ "warps": {"jaw": "warps/jaw.npy", "brows": "...", "breathe": "...", "gaze_x": "...", "gaze_y": "..."},
+ "idle_loops": ["loops/idle1.npy"]}
+```
+Patches are RGBA at their box size, alpha feathered. Expressions are full-size RGBA. Warps are float32 `(252, 252, 2)` displacement fields in pixels at weight 1.0. Loops are uint8 `(N, 252, 252, 3)`.
+
+**Interfaces:** `@dataclass FaceBank` (fields mirror the manifest, loaded as numpy arrays) and `load_bank(path: str) -> FaceBank`. Missing mouth patches fall back: `X_*` → hub (no patch), `E/F/G/H` → `C`, `wide` ↔ `mild`. Missing eye patches fall back to `open`. It raises `BankError` with the file name when a referenced file is missing or a size is wrong.
+
+**Tests:** `test_load_minimal_bank` (hub + mask + one mouth patch loads), `test_mouth_fallbacks` (`E_wide` resolves to `C_mild` when only that exists), `test_bad_size_raises`, `test_missing_file_names_file`.
+
+Commit: `feat: face asset bank format`
+
+### Task 16: Sprite compositor renderer
+
+**Files:** Create `mirror/face/sprite.py`. Modify `mirror/face/app.py` (choose the renderer by `config.face.renderer`, pass the viseme) and `mirror/config.py` + both TOMLs (`renderer = "sprite"`, `bank = "assets/face/stub"`; the existing tests are updated). Test `tests/test_face_sprite.py`.
+
+**Interfaces:** `class SpriteFace(bank: FaceBank, rng: random.Random | None = None)` with `update(dt: float, state: State, mouth: float, viseme: str) -> None` (advances blink, breathing, gaze and expression springs) and `render() -> np.ndarray` (uint8 252×252×3). `app.py` blits `render()` through `pygame.surfarray`.
+
+**Behaviour:**
+- **Base:** the hub, or the current idle-loop frame if loops exist (ping-pong at 15 fps).
+- **Warp:** one `cv2.remap` per frame. The grid is identity plus Σ weight·field. The mask is warped with the same grid and multiplied in, `borderValue=0`.
+- **Weights:**
+  - jaw = clamp(mouth, 0, 1) × 0.6 (rigid hinge, so ≤ 12 px at the field's scale)
+  - breathe = 0.5 + 0.5·sin(2π t / 4.5 s)
+  - gaze_x/gaze_y: idle wander every 2–5 s; listening centred; thinking (0.6, −0.7)
+  - brows: listening 0.8, thinking 0.4, else 0
+- **Patches:** alpha-blend the eyes (blink every 2–6 s at random over 150 ms: open → half → closed → half → open; thinking uses `squint` if present), the expression (idle: `smirk` fades in at random every 20–40 s for 2 s), and the mouth patch for `viseme` + (`wide` if mouth > 0.5 else `mild`).
+- **Mouth crossfade:** 2 frames between shapes. An unchanged viseme keeps its patch with no crossfade.
+- **State changes:** all weights move with a spring (time constant 120 ms).
+
+**Tests** (stub bank from Task 17's generator, or a synthetic one):
+- `test_render_shape_dtype`
+- `test_background_stays_black` (corners 0)
+- `test_mouth_patch_changes_mouth_region` (`D` vs `X`: mean abs diff in the mouth box > 10)
+- `test_blink_closes_eyes` (force blink: the eye box gets darker)
+- `test_jaw_warp_moves_chin` (mouth 1.0 shifts the lit-pixel centroid in the lower third down by ≥ 2 px)
+- `test_crossfade_two_frames` (a frame between X and D differs from both)
+- `test_render_under_5ms` (median of 100 renders < 5 ms on the dev Mac; skipped in CI if `MIRROR_SKIP_PERF` is set)
+
+Commit: `feat: sprite compositor face`
+
+### Task 17: Bank builder tools, stub bank and asset guide
+
+**Files:** Create `tools/build_bank.py`, `tools/stub_bank.py`, `docs/FACE_ASSETS.md` and `assets/face/stub/` (generated, committed). Test `tests/test_build_bank.py`.
+
+- `tools/stub_bank.py SOURCE.png OUT_DIR`: crops the face (centre square by default, `--box x,y,w,h` to override) and scales to 252. It makes the mask by luminance threshold plus feather, generates the warp fields with moving-least-squares from a default 20-point face layout scaled to the image (`--points points.json` to override), and synthesizes mouth patches procedurally: an A–D ladder by warping the jaw region open and painting the cavity black, with E/F by horizontal squeeze of C. Eye half/closed come from a lid warp plus darkening. It writes `manifest.json`. Purpose: a working bank today from any single image. Run it on the user's reference image `assets/face/source/trickster.png` (already front-facing on pure black; use the full frame, centred square).
+- `tools/build_bank.py RAW_DIR OUT_DIR`: the real pipeline for LivePortrait exports. `RAW_DIR` holds `hub.png`, `lip_00..lip_04.png`, `eye_00..eye_03.png`, `shape_E.png` … `shape_H.png` and `expr_*.png`, all full frames. It aligns each frame to the hub (ECC or phase correlation, sub-pixel), downscales to 252, cuts the mouth/eye boxes with feathered masks, matches each patch's colour mean/std to the hub, paints the mouth interior (pixels darker than a threshold inside the mouth box) pure black, maps the lip ladder to `A,B,C,D` mild/wide, generates the warp fields as in the stub, and writes `manifest.json`.
+- `docs/FACE_ASSETS.md`: the step-by-step guide for the user. Generate the front-facing source image (with prompt text), rent a GPU on RunPod, run ComfyUI-LivePortraitKJ with the exact parameter sweeps, record the webcam driving clips for E/F/G/H and the expressions, export into `RAW_DIR` naming, then run `build_bank.py` and switch `config.face.bank`.
+
+**Tests:** `test_stub_bank_roundtrip` (generate from a synthetic face image into `tmp_path`, `load_bank` succeeds, every A–D mild/wide patch exists, warps have the right shape), `test_build_bank_aligns` (a shifted copy of the hub as `lip_00` comes out aligned within 1 px), `test_black_cavity` (the darkest region inside the mouth box is exactly 0 after the build).
+
+Commit: `feat: face bank tools, stub bank and asset guide`
+
+**Order:** 14 (after 13 lands), then 15 → 17 → 16 (16's tests use 17's stub generator), then the remaining Task 12 (Orin deploy).
+
+---
+
+### Task 18: Filler lines while thinking, and the reply streamed sentence by sentence
+
+**Why:** the reply now starts ~4.3 s after the visitor stops talking. Two changes make the mirror feel immediate. (1) As soon as a question is understood, it speaks a short pre-recorded filler ("Mmmm… now that is an interesting thing to say…") while the LLM works. (2) The LLM reply is streamed, and the first sentence is synthesized and spoken while the rest is still being generated.
+
+**Files:** Create `mirror/fillers.py`. Modify `mirror/llm.py` (streaming), `mirror/conversation.py` (filler + streamed playback), `mirror/persona.py` (filler copy) and `mirror/voice_main.py` (pre-synthesize fillers at startup). Tests: `tests/test_fillers.py`, `tests/test_llm.py`, `tests/test_conversation.py`.
+
+**Filler copy** (`persona.FILLERS: dict[str, list[str]]`, in the oracle's voice, ≤ 2.5 s spoken each):
+- en: "Mmmm… now that is an interesting thing to ask.", "Hmm. The mists are parting…", "Ahh. I have seen this question before, in a dream.", "Patience. The glass is turning.", "Mmm, the stars are whispering…", "Well, well… the threads are moving.", "Interesting. The answer is near.", "Hmmm… let me look beyond the glass."
+- he: "מממ… זו באמת שאלה מעניינת.", "הממ. הערפל מתפזר…", "אהה. את השאלה הזו כבר ראיתי, בחלום.", "סבלנות. הזכוכית מסתובבת.", "מממ, הכוכבים לוחשים…", "טוב, טוב… החוטים זזים.", "מעניין. התשובה קרובה.", "הממ… תנו לי להביט מעבר לזכוכית."
+
+**Persona change (user decision):** the mirror is an **oracle**. Rewrite `persona.SYSTEM_PROMPT` in both languages: you are the oracle that lives in the mirror at Midburn; you answer mysteriously and playfully, in riddles, omens, half-prophecies and metaphors (stars, mists, threads, reflections), always with a wink and warmth; you never give a flat, literal answer, but the visitor should feel there is real meaning in it; never cruel, never frightening, never predicts death, illness or harm; never reveal you are an AI or a computer; 1–3 short spoken sentences; no emojis, lists or stage directions; reply only in the visitor's language; Hebrew addresses the visitor in gender-neutral plural forms, and the oracle speaks of itself in masculine first person. Update `FALLBACK` to oracle style: en "The mists are too thick right now. Ask me again in a moment.", he "הערפל סמיך מדי כרגע. שאלו אותי שוב עוד רגע.". Update `tests/test_llm.py` assertions that pin the old fallback text. Also update the persona line in `MIRROR_CONTEXT.md`.
+
+**Interfaces:**
+- `class FillerBank(tts: TTSRouter, lines: dict[str, list[str]], rng: random.Random | None = None)`. `prepare()` synthesizes every line at startup via `tts.synth_visemes` and caches `(samples, sr, track)`. `pick(lang) -> tuple[np.ndarray, int, VisemeTrack | None] | None` picks at random, never the same line twice in a row per language, and returns None if nothing is cached for `lang`.
+- `LlamaServerLLM.reply_stream(history, user_text, lang) -> Iterator[str]` POSTs with `"stream": true`, parses the SSE `data:` lines (`choices[0].delta.content`), and yields **complete sentences** (split on `(?<=[.!?…])\s+`, final remainder flushed at the end). It stops after `max_sentences`, cuts at `max_chars` total, and strips stage directions and emoji per sentence with the same rules as `trim_reply`. It raises `LLMError` on HTTP or timeout errors before the first sentence. After the first sentence, a mid-stream error ends the stream quietly (log WARNING). `reply()` stays as is.
+- Controller answer flow (replaces the single `llm.reply` + one `synth` + one `play`):
+  1. → THINKING. Start the LLM stream in a worker thread that pushes sentences into a `queue.Queue` (sentinel at the end, exception object on failure).
+  2. If `fillers.pick(lang)` returns a clip and `cfg.filler_enabled`: → SPEAKING, play it (visemes forwarded as usual), then → THINKING if no sentence is ready yet.
+  3. For each sentence from the queue: `synth_visemes` → SPEAKING → play. Synthesize sentence n+1 while sentence n plays (a one-deep synth-ahead in a second worker), so there is no gap between sentences. Append the full joined reply to history at the end.
+  4. An `LLMError` before any sentence (raised from the queue) leads to the existing FALLBACK path. A timeout waiting for the first sentence (`servers.timeout_s`) is treated the same.
+  5. Segments arriving during all of this are still dropped (busy flag unchanged), and no exception escapes `on_segment`.
+- Config: `conversation.filler_enabled = true` (both TOMLs) and `conversation.filler_min_wait_s = 0.0`. The filler only plays if no sentence has arrived within `filler_min_wait_s` after THINKING starts, so keep 0.0 by default (always play).
+- `voice_main`: build `FillerBank(tts, persona.FILLERS)` and call `prepare()` after TTS warmup. Log how long it took.
+
+**Tests (names + assertions):**
+- `test_pick_never_repeats`: 50 picks with 3 lines never repeat back to back
+- `test_pick_unknown_lang_none`
+- `test_reply_stream_yields_sentences`: fake SSE chunks `"Mirror"`, `", mirror. Who"`, `" is fair? You"`, `" are."` yield `["Mirror, mirror.", "Who is fair?", "You are."]`
+- `test_reply_stream_limits`: stops after 3 sentences and respects `max_chars`
+- `test_reply_stream_error_before_first_raises` and `test_reply_stream_error_after_first_ends_quietly`
+- `test_filler_plays_before_reply`: the player's call order is filler clip, then sentence 1, then sentence 2. Lights go THINKING → SPEAKING (filler) → … → LISTENING
+- `test_filler_disabled_skips`
+- `test_first_sentence_synth_while_second_generates`: with a fake stream that blocks before sentence 2, sentence 1 is played before sentence 2 exists
+- `test_stream_failure_before_first_sentence_uses_fallback`: the FALLBACK text is spoken, then IDLE
+- `test_history_gets_joined_reply`
+- Manual: a `mirror-voice --wav` smoke in English and Hebrew reports end-of-speech → first audio (the filler) and → first reply sentence. Target: filler < 1.2 s on the Mac.
+
+Commit: `feat: filler lines and streamed replies`
+
+**Order:** after Task 14; before 15–17.
+
+---
+
+### Task 19: Latency and Hebrew tuning
+
+**Why:** the Task 18 smoke on the 8 GB Mac had the first reply sentence 5–7 s after end of speech. llama-server re-read the ~800–1,000-token oracle prompt (1–1.6 s) because requests landed on fresh slots and the cache went cold after idle. The 4B model also slips into singular Hebrew address.
+
+**Files:** `mirror/llm.py`, `mirror/persona.py`, `mirror/conversation.py`, `mirror/voice_main.py`, `Makefile` + `deploy/systemd/mirror-llm.service` (server flags), tests in `tests/test_llm.py`, `tests/test_conversation.py`.
+
+- **Slot pinning:** run llama-server with `-np 2 --cache-reuse 256`. Every request sends `"id_slot": 0` for `en` and `1` for `he`, plus `"cache_prompt": true`. Make the slot map a module constant.
+- **Warmup:** at startup, after TTS warmup, `LlamaServerLLM.warm(lang)` for both languages: one request with the full system prompt, the user text "." and `max_tokens: 1`. Log the prompt-eval time from the response's `timings.prompt_ms`. Re-warm a language's slot if more than 10 minutes have passed since its last request, in a background thread from `tick()`, never while busy.
+- **Stage directions across sentences:** in the streaming splitter, don't split while the buffer has an unclosed `*`, `[` or `(`. `_clean` also strips stray lone `*[]()`. Test: `"*leans in. whispers* The stars know. [a long pause. then] Yes."` gives `["The stars know.", "Yes."]`.
+- **Mid-reply stall:** if no sentence clip is ready within 0.6 s after the previous one finished, go to THINKING (face and lights) until the next clip arrives. Test with a fake stream that stalls.
+- **History on a mid-reply failure:** sentences already spoken are added to history even if TTS or playback fails later in the reply.
+- **Hebrew address:** add 3 short Hebrew few-shot example pairs (user question → oracle answer) to the Hebrew system prompt, each using plural address ("אתם", "שאלו", "לכם") and correct gender agreement. Keep them inside the cached prefix (before the world text). Test that the Hebrew prompt contains them and that the English prompt does not.
+- **Test hygiene:** filter the torch `jit.script` FutureWarning in pytest config so test output is pristine.
+- **Smoke:** repeat Task 18's English and Hebrew `--wav` runs twice each (warm) and report end-of-speech → filler and → first sentence, plus `timings.prompt_ms` per request. Target: first sentence ≤ 3.5 s warm on the Mac. Report honestly if swap prevents it.
+
+Commit: `perf: pinned prompt cache, warmup, stall handling, Hebrew examples`
