@@ -1,19 +1,23 @@
 """mirror-face: the face renderer process.
 
-Polls the FaceBus for (state, mouth) from mirror-voice and draws the face at
-30 fps, with random blinks and a smoothed mouth. Exits on Esc or SIGTERM.
+Polls the FaceBus for (state, mouth, viseme) from mirror-voice and draws the
+face at 30 fps with a smoothed mouth: either the sprite face composited from a
+face bank (face.renderer = "sprite") or the procedural line face
+("procedural", with its own random blinks). Exits on Esc or SIGTERM.
 """
 import argparse
 import logging
 import math
+import os
 import random
 import signal
 import time
 
+import numpy as np
 import pygame
 
 from mirror.bus import FaceBus
-from mirror.config import load_config
+from mirror.config import Config, load_config
 from mirror.face.draw import draw_face
 from mirror.states import State
 
@@ -42,6 +46,29 @@ def blink_amount(since_blink_start: float) -> float:
     return 1.0 - abs(2.0 * u - 1.0)
 
 
+def repo_path(path: str, config_path: str) -> str:
+    """A relative config path resolved against the repo root (the parent of the
+    config file's directory), like conversation.world_file."""
+    if os.path.isabs(path):
+        return path
+    return os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(config_path))), path)
+
+
+def make_sprite_face(cfg: Config, config_path: str):
+    """The SpriteFace for face.renderer = "sprite", None for "procedural"."""
+    renderer = cfg.face.renderer
+    if renderer == "procedural":
+        return None
+    if renderer != "sprite":
+        raise ValueError(f"unknown face.renderer {renderer!r} (sprite | procedural)")
+    from mirror.face.bank import load_bank
+    from mirror.face.sprite import SpriteFace
+
+    bank_dir = repo_path(cfg.face.bank, config_path)
+    log.info("face bank %s", bank_dir)
+    return SpriteFace(load_bank(bank_dir))
+
+
 def _open_display(cfg):
     size = cfg.face.size
     pygame.display.set_caption("Mirror, Mirror")
@@ -61,14 +88,16 @@ def run(config_path: str) -> None:
     signal.signal(signal.SIGTERM, lambda *_: stop.update(flag=True))
     signal.signal(signal.SIGINT, lambda *_: stop.update(flag=True))
 
+    sprite = make_sprite_face(cfg, config_path)
     pygame.init()
     bus = FaceBus.receiver(cfg.face.bus_port)
     try:
         screen = _open_display(cfg)
         log.info("display %dx%d", *screen.get_size())
         face = pygame.Surface((cfg.face.size, cfg.face.size))
+        sprite_surf = pygame.Surface((sprite.bank.size,) * 2) if sprite else None
         clock = pygame.time.Clock()
-        state, target, mouth = State.IDLE, 0.0, 0.0
+        state, target, mouth, viseme = State.IDLE, 0.0, 0.0, "X"
         t0 = last = time.monotonic()
         next_blink = t0 + random.uniform(*BLINK_GAP_S)
         blink_start = -1.0
@@ -81,14 +110,24 @@ def run(config_path: str) -> None:
             if msg is not None:
                 if msg[0] != state:
                     log.info("face: %s", msg[0].value)
-                state, target, _viseme = msg  # the procedural mouth ignores the shape
+                state, target, viseme = msg  # the procedural mouth ignores the shape
             now = time.monotonic()
             dt, last = now - last, now
-            mouth = step_mouth(mouth, target if state is State.SPEAKING else 0.0, dt)
-            if now >= next_blink:
-                blink_start = now
-                next_blink = now + BLINK_S + random.uniform(*BLINK_GAP_S)
-            draw_face(face, state, mouth, now - t0, blink_amount(now - blink_start))
+            speaking = state is State.SPEAKING
+            mouth = step_mouth(mouth, target if speaking else 0.0, dt)
+            if sprite is not None:
+                sprite.update(dt, state, mouth, viseme if speaking else "X")
+                rgb = sprite.render()  # (h, w, 3); surfarray is (w, h, 3)
+                pygame.surfarray.blit_array(sprite_surf, np.ascontiguousarray(rgb.transpose(1, 0, 2)))
+                if sprite_surf.get_size() == face.get_size():
+                    face.blit(sprite_surf, (0, 0))
+                else:
+                    pygame.transform.smoothscale(sprite_surf, face.get_size(), face)
+            else:
+                if now >= next_blink:
+                    blink_start = now
+                    next_blink = now + BLINK_S + random.uniform(*BLINK_GAP_S)
+                draw_face(face, state, mouth, now - t0, blink_amount(now - blink_start))
             if cfg.face.fullscreen:
                 screen.fill((0, 0, 0))
                 screen.blit(face, (0, 0))

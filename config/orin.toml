@@ -25,6 +25,8 @@ screen_h = 1080
 fullscreen = true
 window_scale = 3
 bus_port = 7777
+renderer = "sprite"           # "sprite" (face bank) | "procedural" (drawn lines)
+bank = "assets/face/stub"     # face bank directory; relative to the repo root
 
 [lights]
 kind = "wled"

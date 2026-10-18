@@ -39,6 +39,8 @@ class FaceConfig:
     fullscreen: bool = False
     window_scale: int = 3
     bus_port: int = 7777
+    renderer: str = "sprite"  # "sprite" (face bank) | "procedural" (drawn lines)
+    bank: str = "assets/face/stub"  # face bank directory; relative to the repo root
 
 
 @dataclass

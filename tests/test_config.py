@@ -10,6 +10,7 @@ def test_load_mac_config():
     assert c.tts.he_engine == "phonikud"
     assert c.tts.phonikud_model == "models/phonikud-1.0.int8.onnx"
     assert c.tts.phonikud_voice_he == "models/phonikud-tts-he.onnx"
+    assert c.face.renderer == "sprite" and c.face.bank == "assets/face/stub"
 
 
 def test_load_orin_config():
@@ -19,3 +20,4 @@ def test_load_orin_config():
     assert c.models_dir == "/home/mirror/mirror-models"
     assert c.tts.he_engine == "phonikud"
     assert c.tts.phonikud_voice_he == "/home/mirror/mirror-models/phonikud-tts-he.onnx"
+    assert c.face.renderer == "sprite" and c.face.bank == "assets/face/stub"
