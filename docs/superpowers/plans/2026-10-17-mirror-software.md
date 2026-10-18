@@ -577,3 +577,19 @@ Commit: `feat: filler lines and streamed replies`
 - **Smoke:** repeat Task 18's English and Hebrew `--wav` runs twice each (warm) and report end-of-speech → filler and → first sentence, plus `timings.prompt_ms` per request. Target: first sentence ≤ 3.5 s warm on the Mac. Report honestly if swap prevents it.
 
 Commit: `perf: pinned prompt cache, warmup, stall handling, Hebrew examples`
+
+---
+
+### Task 20: RenikudPlus as the Hebrew pronunciation engine
+
+**Why:** [RenikudPlus](https://github.com/maxmelichov/RenikudPlus) (Apache-2.0, ONNX, model `notmax123/RenikudPlus`) reports 86.2% overall word accuracy against Phonikud's 66.4%, including gender 99.3% against 37.5%. Hebrew text→IPA is exactly the first stage of our Hebrew voice. It also takes a speaker-gender hint (0 unknown, 1 male, 2 female). The oracle is masculine, so use 1.
+
+**Files:** `mirror/tts.py` (G2P backend selectable inside the Hebrew voice), `mirror/config.py` + both TOMLs (`tts.he_g2p = "renikud" | "phonikud"`, `tts.renikud_model`), `deploy/fetch_models.sh` (pinned download), `pyproject.toml` (`renikud-plus[cpu]` pinned), `tests/test_tts.py`.
+
+- [ ] **Step 1: Phoneme compatibility.** Compare RenikudPlus's output symbol inventory on ~200 varied Hebrew sentences (persona, fillers, oracle replies from logs, numbers) with the Hebrew Piper voice's `phoneme_id_map`. Report unmapped symbols. If any exist, add a small explicit symbol-mapping table (e.g. different stress or affricate notation), with tests. If too many symbols are unmappable, STOP and report — the voice would need retraining.
+- [ ] **Step 2: Implement** `RenikudG2P(model_path, speaker=1)` with `phonemize(text) -> str`, used by the Hebrew voice when `he_g2p = "renikud"`. Keep Phonikud selectable. Load lazily, once, on CPU, using the int8 model by default if quality holds.
+- [ ] **Step 3: A/B listening set.** Synthesize the same 15 Hebrew lines (all 8 Hebrew fillers, the fallback, and 6 typical oracle replies) with both G2Ps into WAVs, and write a side-by-side page listing each line's IPA from both. Measure G2P time per sentence and RSS.
+- [ ] **Step 4: Tests:** a fast stub test for the backend switch, plus a slow real-model test (skipped without the model) asserting non-empty IPA made only of mapped symbols.
+- [ ] **Step 5: Default.** Set `he_g2p = "renikud"` only if Step 3 shows no regressions in a fluent read of the IPA and listening. Otherwise leave Phonikud as the default and report.
+
+Commit: `feat: RenikudPlus Hebrew G2P option`
