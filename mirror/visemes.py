@@ -1,4 +1,5 @@
-"""Mouth shapes (visemes) from Piper's phoneme alignments.
+"""Mouth shapes (visemes) from Piper's phoneme alignments, or estimated from IPA and
+the audio's loudness for engines that give no phoneme timings (Pocket TTS).
 
 Shape letters follow the Preston Blair / Rhubarb set:
   A closed (m b p)        B slightly open, most consonants, "ee"
@@ -9,6 +10,7 @@ Shape letters follow the Preston Blair / Rhubarb set:
 from __future__ import annotations
 
 import math
+import re
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -153,3 +155,119 @@ def track_from_alignments(alignments: list[tuple[str, int]], sr: int,
             out.append("B")
             shift = FRAME_S / 2
     return VisemeTrack(np.array(times), out, end)
+
+
+# --- Estimated tracks: IPA spread over the voiced parts of the audio -----------------
+
+ENVELOPE_HOP_S = 0.02     # loudness envelope resolution
+VOICED_THRESHOLD = 0.08   # of the envelope's 95th percentile
+VOICED_FLOOR = 1e-4       # absolute: below this RMS is silence whatever the percentile
+MIN_GAP_S = 0.07          # shorter silences inside speech are closed
+MIN_VOICED_S = 0.04       # shorter voiced islands are dropped
+_PAUSE_PUNCT = ",.?!…;:—–"
+_IPA_TOKENS = re.compile(rf"[^\s{_PAUSE_PUNCT}]+|[{_PAUSE_PUNCT}]")
+_VOWELS = frozenset("aeiouəɛɔɪʊæɑʌɐɜøœyɒɚɘɵɤɯɨʉᵻ")
+_VOWEL_WEIGHT, _CONSONANT_WEIGHT, _WORD_GAP_WEIGHT = 1.4, 0.9, 0.15
+_MARKS = _JOIN_NEXT | _JOIN_PREVIOUS
+
+
+def voiced_segments(samples: np.ndarray, sr: int) -> list[list[float]]:
+    """[[start_s, end_s]] of the audio's voiced stretches, from a 20 ms RMS envelope."""
+    a = np.asarray(samples, dtype=np.float32).reshape(-1)
+    hop = max(1, int(round(sr * ENVELOPE_HOP_S)))
+    n = len(a) // hop
+    if n == 0:
+        return []
+    rms = np.sqrt((a[: n * hop].reshape(n, hop) ** 2).mean(axis=1))
+    rms = np.convolve(rms, np.ones(3) / 3, "same")
+    on = rms > max(VOICED_THRESHOLD * float(np.percentile(rms, 95)), VOICED_FLOOR)
+    segs: list[list[float]] = []
+    i = 0
+    while i < n:
+        if not on[i]:
+            i += 1
+            continue
+        j = i
+        while j < n and on[j]:
+            j += 1
+        start, end = i * hop / sr, j * hop / sr
+        if segs and start - segs[-1][1] < MIN_GAP_S:
+            segs[-1][1] = end
+        else:
+            segs.append([start, end])
+        i = j
+    return [s for s in segs if s[1] - s[0] >= MIN_VOICED_S]
+
+
+def _ipa_groups(ipa: str) -> list[list[tuple[str, float]]]:
+    """IPA -> punctuation-delimited groups of weighted phonemes (word gaps included)."""
+    groups, words = [], []
+    for token in _IPA_TOKENS.findall(ipa) + ["."]:
+        if token in _PAUSE_PUNCT:
+            units: list[tuple[str, float]] = []
+            for word in words:
+                phonemes = [(c, _VOWEL_WEIGHT if c in _VOWELS else _CONSONANT_WEIGHT)
+                            for c in word if c not in _MARKS]
+                if phonemes:
+                    if units:
+                        units.append((" ", _WORD_GAP_WEIGHT))
+                    units.extend(phonemes)
+            if units:
+                groups.append(units)
+            words = []
+        else:
+            words.append(token)
+    return groups
+
+
+def estimate_track(ipa: str, samples: np.ndarray, sr: int) -> VisemeTrack | None:
+    """A viseme track for audio with no phoneme timings: each punctuation group of the
+    IPA goes to the voiced audio between the longest pauses, its phonemes spread over
+    that voiced time (vowels a little longer than consonants), then the usual
+    track_from_alignments hold rules. Silence is rest (X). None when the IPA has no
+    phonemes (the face then shapes the mouth from loudness)."""
+    total = len(samples)
+    end = total / sr if sr else 0.0
+    groups = _ipa_groups(ipa)
+    if not groups:
+        return None
+    segs = voiced_segments(samples, sr)
+    if not segs:
+        return VisemeTrack(np.array([0.0]), ["X"], end)
+
+    # The k-1 longest pauses split the voiced stretches among the first k groups;
+    # with more groups than stretches the extra groups join the last one.
+    k = min(len(groups), len(segs))
+    gaps = sorted(range(len(segs) - 1), key=lambda i: segs[i + 1][0] - segs[i][1],
+                  reverse=True)[: k - 1]
+    seg_groups, first = [], 0
+    for cut in sorted(gaps) + [len(segs) - 1]:
+        seg_groups.append(segs[first: cut + 1])
+        first = cut + 1
+    if len(groups) > k:
+        groups = groups[: k - 1] + [[u for g in groups[k - 1:] for u in g]]
+
+    spans: list[tuple[str, float, float]] = []  # (phoneme, start_s, end_s), in order
+    for units, stretch in zip(groups, seg_groups):
+        voiced = sum(e - b for b, e in stretch)
+        weight = sum(w for _, w in units)
+        bounds = np.concatenate([[0.0], np.cumsum([w for _, w in units])]) * voiced / weight
+        offset = 0.0  # voiced time before this stretch, within the group
+        for b, e in stretch:
+            lo, hi = offset, offset + (e - b)
+            for (phoneme, _), p0, p1 in zip(units, bounds[:-1], bounds[1:]):
+                s0, s1 = max(p0, lo), min(p1, hi)
+                if s1 > s0:
+                    spans.append((phoneme, b + s0 - lo, b + s1 - lo))
+            offset = hi
+
+    alignments: list[tuple[str, int]] = []
+    t = 0.0
+    for phoneme, b, e in spans:
+        if b > t:
+            alignments.append(("_", int(round((b - t) * sr))))
+        alignments.append((phoneme, int(round((e - b) * sr))))
+        t = e
+    if end > t:
+        alignments.append(("$", int(round((end - t) * sr))))
+    return track_from_alignments(alignments, sr, total)

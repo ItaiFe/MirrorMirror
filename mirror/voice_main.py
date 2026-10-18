@@ -286,6 +286,34 @@ def build_hebrew_tts(tts_cfg: TtsConfig):
     raise ValueError(f"unknown tts.he_engine {tts_cfg.he_engine!r} (phonikud | mms)")
 
 
+FILLER_BUDGET_S = 2.5  # persona.py's filler length; Pocket voices can run past it
+
+
+def build_tts(tts_cfg: TtsConfig):
+    """(router, sample rate, engine) for tts.engine. "pocket" loads Pocket TTS for both
+    languages (Hebrew through RenikudPlus IPA); if that fails it logs a WARNING and
+    falls back to the piper stack."""
+    from mirror import tts
+
+    if tts_cfg.engine not in ("piper", "pocket"):
+        raise ValueError(f"unknown tts.engine {tts_cfg.engine!r} (piper | pocket)")
+    if tts_cfg.engine == "pocket":
+        try:
+            g2p = tts.RenikudG2P(tts_cfg.renikud_model)
+            g2p.phonemize("שלום")  # load it now: Pocket's Hebrew needs it
+            pocket = tts.PocketTTS(tts_cfg.pocket_model, voice=tts_cfg.pocket_voice,
+                                   voice_file=tts_cfg.pocket_voice_file,
+                                   threads=tts_cfg.pocket_threads, g2p=g2p)
+            return (tts.TTSRouter(pocket.for_lang("en"), pocket.for_lang("he")),
+                    pocket.sample_rate, "pocket")
+        except Exception as e:
+            log.warning("Pocket TTS (%s) failed to load (%s: %s); falling back to piper",
+                        tts_cfg.pocket_model, type(e).__name__, e)
+    log.info("loading TTS voices (Hebrew: %s, G2P %s)", tts_cfg.he_engine, tts_cfg.he_g2p)
+    en_tts = tts.PiperTTS(tts_cfg.piper_voice_en)
+    return tts.TTSRouter(en_tts, build_hebrew_tts(tts_cfg)), en_tts.sample_rate, "piper"
+
+
 def warm_llm(llm) -> list:
     """Load each language's system prompt into its llama-server slot, so the first
     question is not slowed by a cold prompt. A failure is logged, not fatal; returns
@@ -306,7 +334,6 @@ def run(cfg: Config, wav_path=None, config_path=None) -> int:
     # they must come from the local cache, offline.
     os.environ["HF_HUB_OFFLINE"] = "1"
     os.environ["HF_HOME"] = os.path.join(models_dir, "hf")
-    from mirror.tts import PiperTTS, TTSRouter  # after the env is set
 
     stop = threading.Event()
     face = raw_lights = output = None
@@ -333,16 +360,15 @@ def run(cfg: Config, wav_path=None, config_path=None) -> int:
         llm = LlamaServerLLM(cfg.servers.llm_url, cfg.servers.timeout_s,
                              cfg.conversation.max_reply_sentences,
                              cfg.conversation.max_reply_chars, world=world)
-        log.info("loading TTS voices (Hebrew: %s, G2P %s)", cfg.tts.he_engine, cfg.tts.he_g2p)
-        en_tts = PiperTTS(cfg.tts.piper_voice_en)
-        tts = TTSRouter(en_tts, build_hebrew_tts(cfg.tts))
+        tts, tts_rate, engine = build_tts(cfg.tts)  # after the env is set
         tts.warmup()
-        fillers = FillerBank(tts, FILLERS)
+        fillers = FillerBank(tts, FILLERS,
+                             max_clip_s=FILLER_BUDGET_S if engine == "pocket" else None)
         t0 = time.monotonic()
         fillers.prepare()
         log.info("filler lines ready in %.1f s", time.monotonic() - t0)
         unwarmed = warm_llm(llm)
-        open_output(output, en_tts.sample_rate)
+        open_output(output, tts_rate)
         player = LatencyPlayer(output)
         controller = Controller(stt, llm, tts, player, gate, face, cfg.conversation,
                                 fillers=fillers,

@@ -49,3 +49,24 @@ def test_failing_line_is_skipped():
     bank = FillerBank(Flaky(), {"en": ["bad", "good"]})
     bank.prepare()
     assert bank.pick("en") is not None
+
+
+class LongTTS(FakeTTS):
+    def synth_visemes(self, text, lang):
+        self.calls.append((text, lang))
+        return np.zeros(int(len(text) * 22050), np.float32), 22050, None  # 1 s per char
+
+
+def test_long_filler_warns_when_a_budget_is_set(caplog):
+    bank = FillerBank(LongTTS(), {"en": ["ab", "abc"]}, max_clip_s=2.5)
+    with caplog.at_level("WARNING", logger="mirror.fillers"):
+        bank.prepare()
+    warnings = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+    assert len(warnings) == 1 and "abc" in warnings[0] and "3.0" in warnings[0]
+    assert bank.pick("en") is not None  # still used: a warning, not a drop
+
+
+def test_no_filler_budget_by_default(caplog):
+    with caplog.at_level("WARNING", logger="mirror.fillers"):
+        FillerBank(LongTTS(), {"en": ["abcdef"]}).prepare()
+    assert not [r for r in caplog.records if r.levelname == "WARNING"]

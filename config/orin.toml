@@ -20,6 +20,11 @@ renikud_model = "/home/mirror/mirror-models/renikud-plus.int8.onnx"
 phonikud_model = "/home/mirror/mirror-models/phonikud-1.0.int8.onnx"
 phonikud_voice_he = "/home/mirror/mirror-models/phonikud-tts-he.onnx"   # config: same path + ".json"
 mms_model_he = "facebook/mms-tts-heb"
+engine = "piper"          # "piper" | "pocket" (Pocket TTS for both languages; off until measured on the Orin)
+pocket_model = "/home/mirror/mirror-models/pocket-tts-english-ipa.onnx"
+pocket_voice = "javert"   # built in: javert (CC0, deepest), michael (CC-BY), marius (CC0), ...
+# pocket_voice_file = "/home/mirror/mirror-models/my-voice.npy"   # a cloned voice (tools/clone_voice.py)
+pocket_threads = 2
 
 [face]
 size = 252

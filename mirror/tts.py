@@ -1,5 +1,6 @@
 """Bilingual text-to-speech: Piper (English), a Hebrew Piper voice fed by a
-grapheme-to-phoneme stage (RenikudPlus or Phonikud) or Meta MMS (Hebrew), and a router."""
+grapheme-to-phoneme stage (RenikudPlus or Phonikud) or Meta MMS (Hebrew), and a router.
+Optionally Pocket TTS, one model for both languages (Hebrew read as RenikudPlus IPA)."""
 from __future__ import annotations
 
 import json
@@ -10,7 +11,7 @@ from typing import Protocol
 
 import numpy as np
 
-from mirror.visemes import VisemeTrack, track_from_alignments
+from mirror.visemes import VisemeTrack, estimate_track, track_from_alignments, voiced_segments
 
 log = logging.getLogger("mirror.tts")
 
@@ -181,13 +182,15 @@ _SPACE_BEFORE_PUNCT = re.compile(r"\s+(?=[,.?!])")
 _COMMA_BEFORE_PUNCT = re.compile(r",+(?=[,.?!])")
 
 
-def map_renikud_ipa(ipa: str) -> str:
+def map_renikud_ipa(ipa: str, voice_symbols_only: bool = True) -> str:
     """RenikudPlus IPA -> only symbols the Hebrew voice was trained on: pauses become
     commas, a hyphen inside a word joins it, markup goes, and a token with any other
-    symbol left (a Latin word passed through) is dropped."""
+    symbol left (a Latin word passed through) is dropped. With voice_symbols_only=False
+    every token is kept (Pocket TTS reads any IPA, and Latin words as text)."""
     ipa = _PAUSE.sub(",", _JOINER.sub("", ipa))
     words = [w.translate(_MARKUP) for w in ipa.split()]
-    out = " ".join(w for w in words if w and set(w) <= HEBREW_VOICE_SYMBOLS)
+    out = " ".join(w for w in words
+                   if w and (not voice_symbols_only or set(w) <= HEBREW_VOICE_SYMBOLS))
     out = _COMMA_BEFORE_PUNCT.sub("", _SPACE_BEFORE_PUNCT.sub("", out))
     return out.lstrip(" ,.?!")
 
@@ -212,10 +215,18 @@ class RenikudG2P:
                 self._g2p = G2P(self._model_path, datastore=None, lexicon=RENIKUD_LEXICON)
         return self._g2p
 
-    def phonemize(self, text: str) -> str:
+    def _raw(self, text: str) -> str:
         g2p = self._g2p or self._load()
         # Numbers, hyphenated prefixes ("ו-25") and maqaf are handled by RenikudPlus.
-        return map_renikud_ipa(g2p.phonemize(" ".join(text.split()), speaker=self._speaker))
+        return g2p.phonemize(" ".join(text.split()), speaker=self._speaker)
+
+    def phonemize(self, text: str) -> str:
+        """IPA in the Hebrew Piper voice's symbol inventory."""
+        return map_renikud_ipa(self._raw(text))
+
+    def ipa(self, text: str) -> str:
+        """IPA with pauses and markup cleaned but every symbol kept (for Pocket TTS)."""
+        return map_renikud_ipa(self._raw(text), voice_symbols_only=False)
 
 
 class PhonikudHebrewTTS:
@@ -289,6 +300,157 @@ class MmsHebrewTTS:
         with self._torch.no_grad():
             wave = self._model(**inputs).waveform[0]
         return _normalize(wave.cpu().numpy(), self._rate)
+
+
+# Pocket TTS sometimes ends a short sentence after its first word (a premature
+# end-of-speech that depends on the seed). A clip shorter than this share of the
+# expected length is re-rolled with a new seed, at most POCKET_MAX_REROLLS times,
+# and the longest take is kept.
+POCKET_TRUNCATED = 0.45
+POCKET_MAX_REROLLS = 2
+POCKET_S_PER_PHONEME = 0.06
+POCKET_S_PER_CHAR = 0.055
+# Pocket's English voices often open with ~1 s of silence (Piper: ~0.05 s). Silence
+# beyond these margins is cut, so it neither delays the reply nor hides a truncation.
+POCKET_LEAD_S = 0.1
+POCKET_TAIL_S = 0.2
+_NOT_PHONEMES = frozenset(" ,.?!…;:-—–\"'ˈˌːˑ")
+
+
+def expected_duration(text: str, ipa: str | None) -> float:
+    """Rough spoken length: phonemes x 0.06 s from the IPA, else characters x 0.055 s."""
+    if ipa:
+        return POCKET_S_PER_PHONEME * sum(1 for c in ipa if c not in _NOT_PHONEMES)
+    return POCKET_S_PER_CHAR * len(text.strip())
+
+
+def trim_silence(audio: np.ndarray, sr: int, lead_s: float = POCKET_LEAD_S,
+                 tail_s: float = POCKET_TAIL_S) -> np.ndarray:
+    """Audio with at most lead_s of silence before the speech and tail_s after it."""
+    segs = voiced_segments(audio, sr)
+    if not segs:
+        return audio
+    start = max(0, int((segs[0][0] - lead_s) * sr))
+    end = min(len(audio), int(round((segs[-1][1] + tail_s) * sr)))
+    return audio[start:end]
+
+
+class _EspeakIPA:
+    """English text -> espeak IPA through piper's bundled espeak-ng (for the viseme
+    estimate only); None, with one warning, if piper's espeak is not available."""
+
+    def __init__(self):
+        self._phonemizer = None
+        self._failed = False
+        self._lock = threading.Lock()
+
+    def __call__(self, text: str) -> str | None:
+        if self._failed:
+            return None
+        try:
+            with self._lock:
+                if self._phonemizer is None:
+                    from piper.phonemize_espeak import EspeakPhonemizer  # lazy
+
+                    self._phonemizer = EspeakPhonemizer()
+                sentences = self._phonemizer.phonemize("en-us", text)
+        except Exception as e:  # noqa: BLE001 - visemes fall back to loudness
+            log.warning("no espeak for English visemes (%s: %s); the mouth follows "
+                        "loudness", type(e).__name__, e)
+            self._failed = True
+            return None
+        return " ".join("".join(s) for s in sentences)
+
+
+class PocketTTS:
+    """Pocket TTS (ONNX, CPU): one voice for both languages. English goes in as text,
+    Hebrew as RenikudPlus IPA through the model's IPA adapter. It gives no phoneme
+    timings, so the viseme track is estimated from the IPA and the audio's loudness
+    (English IPA from espeak when available, else no track: the mouth follows loudness).
+    """
+
+    def __init__(self, model_path: str, voice: str = "javert", voice_file: str | None = None,
+                 threads: int = 2, g2p=None, en_ipa="espeak", seed: int = 0):
+        from pocket_tts_onnx import PocketTTS as Model  # lazy: heavy optional dep
+
+        self._model = Model(model_path, providers=["CPUExecutionProvider"],
+                            num_threads=threads)
+        if voice_file:
+            # A conditioning cloned offline (tools/clone_voice.py); the encoder never runs here.
+            self._voice = np.load(voice_file)
+        else:
+            if voice not in self._model.voices():
+                raise ValueError(f"unknown Pocket voice {voice!r}; built in: "
+                                 f"{', '.join(self._model.voices())}")
+            self._voice = voice
+        self._g2p = g2p
+        self._en_ipa = _EspeakIPA() if en_ipa == "espeak" else en_ipa
+        self._seed = seed
+        self._rate = int(self._model.sample_rate)
+        self._lock = threading.Lock()
+
+    @property
+    def sample_rate(self) -> int:
+        return self._rate
+
+    def for_lang(self, lang: str) -> "_PocketLang":
+        """A one-language Synth (synth(text), synth_visemes(text)) for TTSRouter."""
+        return _PocketLang(self, lang)
+
+    def _generate(self, text: str, phonemes: bool, expected_s: float) -> np.ndarray:
+        best = np.zeros(0, np.float32)
+        for attempt in range(POCKET_MAX_REROLLS + 1):
+            with self._lock:
+                raw, rate = self._model.create(text, voice=self._voice, phonemes=phonemes,
+                                               seed=self._seed + attempt)
+            audio = trim_silence(_normalize(raw, rate)[0], self._rate)
+            if len(audio) > len(best):
+                best = audio
+            if len(audio) / self._rate >= POCKET_TRUNCATED * expected_s:
+                if attempt:
+                    log.info("pocket: re-roll %d gave a full clip for %r", attempt, text)
+                return audio
+            log.info("pocket: %.2f s clip, %.2f s expected: re-rolling %r",
+                     len(audio) / self._rate, expected_s, text)
+        log.warning("pocket: still short after %d re-rolls; keeping the longest "
+                    "(%.2f s of %.2f s expected) for %r", POCKET_MAX_REROLLS,
+                    len(best) / self._rate, expected_s, text)
+        return best
+
+    def synth_visemes(self, text: str, lang: str = "en"
+                      ) -> tuple[np.ndarray, int, VisemeTrack | None]:
+        text = " ".join(text.split())
+        if lang == "he":
+            ipa = self._g2p.ipa(text) if text else ""
+            model_input, phonemes = ipa, True
+        else:
+            ipa = self._en_ipa(text) if text and self._en_ipa is not None else None
+            model_input, phonemes = text, False
+        if not model_input.strip(" ,.?!"):
+            return np.zeros(0, np.float32), self._rate, None
+        audio = self._generate(model_input, phonemes, expected_duration(text, ipa))
+        track = estimate_track(ipa, audio, self._rate) if ipa else None
+        return audio, self._rate, track
+
+    def synth(self, text: str, lang: str = "en") -> tuple[np.ndarray, int]:
+        audio, rate, _ = self.synth_visemes(text, lang)
+        return audio, rate
+
+
+class _PocketLang:
+    def __init__(self, tts: PocketTTS, lang: str):
+        self._tts = tts
+        self._lang = lang
+
+    @property
+    def sample_rate(self) -> int:
+        return self._tts.sample_rate
+
+    def synth(self, text: str) -> tuple[np.ndarray, int]:
+        return self._tts.synth(text, self._lang)
+
+    def synth_visemes(self, text: str) -> tuple[np.ndarray, int, VisemeTrack | None]:
+        return self._tts.synth_visemes(text, self._lang)
 
 
 class TTSRouter:

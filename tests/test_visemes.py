@@ -133,3 +133,70 @@ def test_piper_alignments_real():
     duration = len(audio) / sr
     assert track.end - track.times[0] >= 0.9 * duration
     assert set(track.shapes) <= set("ABCDEFGHX") and "A" in track.shapes
+
+
+# --- estimate_track: IPA + energy envelope (engines without phoneme timings) ---------
+
+POCKET_SR = 24000
+
+
+def _voiced(*spans, sr=POCKET_SR, total_s=None):
+    """Audio with a 150 Hz tone over each (start_s, end_s) span, silence elsewhere."""
+    total_s = total_s if total_s is not None else max(e for _, e in spans) + 0.2
+    a = np.zeros(int(total_s * sr), np.float32)
+    for b, e in spans:
+        i, j = int(b * sr), int(e * sr)
+        a[i:j] = 0.3 * np.sin(2 * np.pi * 150 * np.arange(j - i) / sr)
+    return a
+
+
+def _frames(track, end_s):
+    return [track.at(i * FRAME_S) for i in range(int(end_s / FRAME_S))]
+
+
+def test_estimate_track_shows_closures():
+    from mirror.visemes import estimate_track
+
+    a = _voiced((0.1, 1.3))
+    track = estimate_track("mˈama bˈaba pˈapa", a, POCKET_SR)
+    assert "A" in track.shapes and "D" in track.shapes
+    assert track.at(0.12) == "A"  # the first sound is the closed "m"
+
+
+def test_estimate_track_spans_the_audio():
+    from mirror.visemes import estimate_track
+
+    a = _voiced((0.2, 1.0), (1.4, 2.2), total_s=2.5)
+    track = estimate_track("ʃalˈom, lˈeχ lˈeχa.", a, POCKET_SR)
+    assert track.end == pytest.approx(len(a) / POCKET_SR)
+    assert track.at(0.05) == "X"   # leading silence
+    assert track.at(1.2) == "X"    # the pause at the comma
+    assert track.at(2.4) == "X"    # trailing silence
+    voiced = [track.at(t) for t in np.arange(0.25, 0.95, FRAME_S)] + \
+        [track.at(t) for t in np.arange(1.45, 2.15, FRAME_S)]
+    assert sum(s != "X" for s in voiced) >= 0.8 * len(voiced)  # speech moves the mouth
+
+
+def test_estimate_track_silence_is_rest():
+    from mirror.visemes import estimate_track
+
+    a = np.zeros(POCKET_SR, np.float32)
+    track = estimate_track("mˈama", a, POCKET_SR)
+    assert set(_frames(track, 1.0)) == {"X"}
+    assert track.end == pytest.approx(1.0)
+
+
+def test_estimate_track_without_phonemes_is_none():
+    from mirror.visemes import estimate_track
+
+    assert estimate_track(" ,. ", _voiced((0.1, 0.5)), POCKET_SR) is None
+    assert estimate_track("", _voiced((0.1, 0.5)), POCKET_SR) is None
+
+
+def test_estimate_track_more_groups_than_pauses():
+    from mirror.visemes import estimate_track
+
+    a = _voiced((0.1, 1.5))  # one voiced stretch, three punctuation groups
+    track = estimate_track("mˈa. lˈo, bˈa.", a, POCKET_SR)
+    assert set(track.shapes) <= set("ABCDEFGHX") and "A" in track.shapes
+    assert track.end == pytest.approx(len(a) / POCKET_SR)

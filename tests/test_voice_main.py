@@ -388,3 +388,101 @@ def test_wav_tail_covers_the_segmenter_silence():
     assert seg.min_silence_s == pytest.approx(46 * 0.032)  # whole frames, floored
     assert wav_tail_s(seg) == pytest.approx(seg.min_silence_s + WAV_TAIL_MARGIN_S)
     assert wav_tail_s(seg) > 1.5
+
+
+# --- tts.engine: piper (default) | pocket ---------------------------------------------
+
+class FakePiper(Recorder):
+    sample_rate = 22050
+
+
+class FakePocket(Recorder):
+    sample_rate = 24000
+
+    def for_lang(self, lang):
+        return ("view", lang)
+
+
+def _stub_piper_stack(monkeypatch):
+    monkeypatch.setattr(mirror.tts, "PiperTTS", FakePiper)
+    monkeypatch.setattr(mirror.tts, "PhonikudHebrewTTS", Recorder)
+    monkeypatch.setattr(mirror.tts, "RenikudG2P", G2PRecorder)
+
+
+def test_build_tts_piper_by_default(monkeypatch):
+    from mirror.voice_main import build_tts
+
+    _stub_piper_stack(monkeypatch)
+    monkeypatch.setattr(mirror.tts, "PocketTTS", lambda *a, **k: pytest.fail("loaded pocket"))
+    router, rate, engine = build_tts(TtsConfig(piper_voice_en="en.onnx"))
+    assert engine == "piper" and rate == 22050
+    assert isinstance(router._en, FakePiper) and router._en.args == ("en.onnx",)
+    assert isinstance(router._he, Recorder)
+
+
+def test_build_tts_pocket(monkeypatch):
+    from mirror.voice_main import build_tts
+
+    _stub_piper_stack(monkeypatch)
+    monkeypatch.setattr(mirror.tts, "PocketTTS", FakePocket)
+    cfg = TtsConfig(engine="pocket", pocket_model="p.onnx", pocket_voice="michael",
+                    pocket_voice_file="v.npy", pocket_threads=3, renikud_model="r.onnx")
+    router, rate, engine = build_tts(cfg)
+    assert engine == "pocket" and rate == 24000
+    assert router._en == ("view", "en") and router._he == ("view", "he")
+
+
+def test_build_tts_pocket_passes_its_settings(monkeypatch):
+    from mirror.voice_main import build_tts
+
+    _stub_piper_stack(monkeypatch)
+    made = []
+
+    class Pocket(FakePocket):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            made.append(self)
+
+    monkeypatch.setattr(mirror.tts, "PocketTTS", Pocket)
+    build_tts(TtsConfig(engine="pocket", pocket_model="p.onnx", pocket_voice="michael",
+                        pocket_voice_file="v.npy", pocket_threads=3, renikud_model="r.onnx"))
+    (p,) = made
+    assert p.args == ("p.onnx",)
+    assert p.kwargs["voice"] == "michael" and p.kwargs["voice_file"] == "v.npy"
+    assert p.kwargs["threads"] == 3
+    g2p = p.kwargs["g2p"]
+    assert isinstance(g2p, G2PRecorder) and g2p.args == ("r.onnx",) and g2p.probed
+
+
+def test_build_tts_pocket_failure_falls_back_to_piper(monkeypatch, caplog):
+    from mirror.voice_main import build_tts
+
+    _stub_piper_stack(monkeypatch)
+
+    def broken(*args, **kwargs):
+        raise ImportError("No module named 'pocket_tts_onnx'")
+
+    monkeypatch.setattr(mirror.tts, "PocketTTS", broken)
+    with caplog.at_level("WARNING", logger="mirror.voice"):
+        router, rate, engine = build_tts(TtsConfig(engine="pocket"))
+    assert engine == "piper" and rate == 22050 and isinstance(router._en, FakePiper)
+    assert any(r.levelname == "WARNING" and "pocket" in r.getMessage().lower()
+               for r in caplog.records)
+
+
+def test_build_tts_pocket_without_hebrew_g2p_falls_back_to_piper(monkeypatch, caplog):
+    from mirror.voice_main import build_tts
+
+    _stub_piper_stack(monkeypatch)
+    monkeypatch.setattr(mirror.tts, "PocketTTS", FakePocket)
+    monkeypatch.setattr(mirror.tts, "RenikudG2P", BrokenG2P)  # the piper stack falls back too
+    with caplog.at_level("WARNING", logger="mirror.voice"):
+        router, rate, engine = build_tts(TtsConfig(engine="pocket"))
+    assert engine == "piper" and isinstance(router._en, FakePiper)
+
+
+def test_build_tts_unknown_engine():
+    from mirror.voice_main import build_tts
+
+    with pytest.raises(ValueError, match="engine"):
+        build_tts(TtsConfig(engine="espeak"))

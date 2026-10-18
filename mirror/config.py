@@ -35,6 +35,13 @@ class TtsConfig:
     phonikud_voice_he: str = "models/phonikud-tts-he.onnx"
     phonikud_voice_config_he: Optional[str] = None  # default: <phonikud_voice_he>.json
     mms_model_he: str = "facebook/mms-tts-heb"
+    # "piper" (Piper English + the Hebrew engine above) | "pocket" (Pocket TTS for both
+    # languages, Hebrew via RenikudPlus IPA; falls back to piper if it fails to load)
+    engine: str = "piper"
+    pocket_model: str = "models/pocket-tts-english-ipa.onnx"
+    pocket_voice: str = "javert"  # a built-in voice; ignored when pocket_voice_file is set
+    pocket_voice_file: Optional[str] = None  # a cloned voice (.npy, tools/clone_voice.py)
+    pocket_threads: int = 2
 
 
 @dataclass

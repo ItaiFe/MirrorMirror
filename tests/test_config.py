@@ -32,3 +32,20 @@ def test_load_orin_config():
 def test_default_g2p_matches_the_shipped_configs():
     assert TtsConfig().he_g2p == DEFAULT_G2P
     assert TtsConfig().renikud_model == "models/renikud-plus.int8.onnx"
+
+
+def test_tts_engine_defaults_to_piper_with_pocket_off():
+    t = TtsConfig()
+    assert t.engine == "piper"
+    assert t.pocket_model == "models/pocket-tts-english-ipa.onnx"
+    assert t.pocket_voice == "javert" and t.pocket_voice_file is None
+    assert t.pocket_threads == 2
+
+
+def test_shipped_configs_keep_piper_and_name_the_pocket_model():
+    mac, orin = load_config("config/mac.toml").tts, load_config("config/orin.toml").tts
+    assert mac.engine == orin.engine == "piper"
+    assert mac.pocket_model == "models/pocket-tts-english-ipa.onnx"
+    assert orin.pocket_model == "/home/mirror/mirror-models/pocket-tts-english-ipa.onnx"
+    assert mac.pocket_voice == orin.pocket_voice == "javert"
+    assert mac.pocket_threads == orin.pocket_threads == 2

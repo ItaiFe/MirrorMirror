@@ -403,3 +403,241 @@ def test_renikud_real_ipa_uses_only_voice_symbols():
         assert ipa and "ˈ" in ipa, line
         assert set(ipa) <= HEBREW_VOICE_SYMBOLS, (line, ipa)
         assert not voice_symbols or set(ipa) <= voice_symbols
+
+
+# --- Pocket TTS (optional engine) -----------------------------------------------------
+
+POCKET_MODEL = Path("models/pocket-tts-english-ipa.onnx")
+POCKET_SR = 24000
+
+
+def _speech(seconds):
+    t = np.arange(int(seconds * POCKET_SR)) / POCKET_SR
+    return (0.3 * np.sin(2 * np.pi * 150 * t)).astype(np.float32)
+
+
+def _fake_pocket(monkeypatch, durations=None):
+    """Install a fake `pocket_tts_onnx`. durations(call_index, text) -> seconds of audio
+    (default: 0.08 s per character, never truncated)."""
+    record = {"inits": [], "calls": []}
+
+    class Model:
+        sample_rate = POCKET_SR
+
+        def __init__(self, path, providers=None, num_threads=2):
+            record["inits"].append((path, providers, num_threads))
+
+        def voices(self):
+            return ["alba", "javert", "michael"]
+
+        def create(self, text, voice="alba", phonemes=False, seed=None, **kwargs):
+            i = len(record["calls"])
+            record["calls"].append(dict(text=text, voice=voice, phonemes=phonemes, seed=seed))
+            s = durations(i, text) if durations else 0.08 * len(text)
+            return _speech(s), POCKET_SR
+
+    module = types.ModuleType("pocket_tts_onnx")
+    module.PocketTTS = Model
+    monkeypatch.setitem(sys.modules, "pocket_tts_onnx", module)
+    return record
+
+
+class FakeIpaG2P:
+    def __init__(self, ipa="ʃalˈom ʔolˈam."):
+        self.ipa_calls = []
+        self._ipa = ipa
+
+    def ipa(self, text):
+        self.ipa_calls.append(text)
+        return self._ipa
+
+
+def test_pocket_loads_the_model_on_cpu_with_threads(monkeypatch):
+    record = _fake_pocket(monkeypatch)
+    from mirror.tts import PocketTTS
+
+    tts = PocketTTS("m.onnx", voice="michael", threads=3, g2p=FakeIpaG2P(), en_ipa=None)
+    (path, providers, threads), = record["inits"]
+    assert path == "m.onnx" and providers == ["CPUExecutionProvider"] and threads == 3
+    assert tts.sample_rate == POCKET_SR
+
+
+def test_pocket_unknown_voice_fails_at_load(monkeypatch):
+    _fake_pocket(monkeypatch)
+    from mirror.tts import PocketTTS
+
+    with pytest.raises(ValueError, match="male1"):
+        PocketTTS("m.onnx", voice="male1", g2p=FakeIpaG2P())
+
+
+def test_pocket_voice_file_is_a_cloned_conditioning(monkeypatch, tmp_path):
+    record = _fake_pocket(monkeypatch)
+    from mirror.tts import PocketTTS
+
+    cond = np.zeros((1, 4, 8), np.float32)
+    np.save(tmp_path / "v.npy", cond)
+    tts = PocketTTS("m.onnx", voice="nope", voice_file=str(tmp_path / "v.npy"),
+                    g2p=FakeIpaG2P(), en_ipa=None)
+    tts.synth("Hello there.", "en")
+    voice = record["calls"][0]["voice"]
+    assert isinstance(voice, np.ndarray) and voice.shape == (1, 4, 8)
+
+
+def test_pocket_english_text_hebrew_ipa(monkeypatch):
+    record = _fake_pocket(monkeypatch)
+    from mirror.tts import PocketTTS
+
+    g2p = FakeIpaG2P()
+    tts = PocketTTS("m.onnx", voice="javert", g2p=g2p, en_ipa=lambda text: None)
+    audio, sr = tts.synth("The path you seek.", "en")
+    assert sr == POCKET_SR and audio.dtype == np.float32 and len(audio) > 0
+    audio, sr = tts.synth("שלום עולם", "he")
+    en, he = record["calls"]
+    assert en["text"] == "The path you seek." and en["phonemes"] is False
+    assert he["text"] == "ʃalˈom ʔolˈam." and he["phonemes"] is True
+    assert en["voice"] == he["voice"] == "javert"
+    assert g2p.ipa_calls == ["שלום עולם"]
+
+
+def test_pocket_rerolls_a_truncated_clip(monkeypatch, caplog):
+    # the first call stops after the first word; the re-roll speaks it all
+    record = _fake_pocket(monkeypatch, lambda i, text: 0.2 if i == 0 else 2.0)
+    from mirror.tts import PocketTTS
+
+    tts = PocketTTS("m.onnx", g2p=FakeIpaG2P(), en_ipa=None)
+    with caplog.at_level("INFO", logger="mirror.tts"):
+        audio, sr = tts.synth("Hmm. The mists are parting.", "en")
+    assert len(audio) / sr == pytest.approx(2.0)
+    seeds = [c["seed"] for c in record["calls"]]
+    assert len(seeds) == 2 and seeds[0] != seeds[1]
+
+
+def test_pocket_reroll_is_bounded_and_keeps_the_longest(monkeypatch, caplog):
+    lengths = [0.2, 0.4, 0.3]
+    record = _fake_pocket(monkeypatch, lambda i, text: lengths[i])
+    from mirror.tts import PocketTTS
+
+    tts = PocketTTS("m.onnx", g2p=FakeIpaG2P(), en_ipa=None)
+    with caplog.at_level("WARNING", logger="mirror.tts"):
+        audio, sr = tts.synth("Hmm. The mists are parting.", "en")
+    assert len(record["calls"]) == 3  # the first try and at most 2 re-rolls
+    assert len(set(c["seed"] for c in record["calls"])) == 3
+    assert len(audio) / sr == pytest.approx(0.4)
+    assert any(r.levelname == "WARNING" for r in caplog.records)
+
+
+def test_pocket_no_reroll_when_long_enough(monkeypatch):
+    # 27 characters x 0.055 s = 1.5 s expected; 45 % of that is 0.67 s
+    record = _fake_pocket(monkeypatch, lambda i, text: 0.7)
+    from mirror.tts import PocketTTS
+
+    PocketTTS("m.onnx", g2p=FakeIpaG2P(), en_ipa=None).synth(
+        "Hmm. The mists are parting.", "en")
+    assert len(record["calls"]) == 1
+
+
+def test_pocket_expected_duration_from_phonemes(monkeypatch):
+    # Hebrew: 10 phonemes (marks, spaces, punctuation not counted) x 0.06 s = 0.6 s
+    record = _fake_pocket(monkeypatch, lambda i, text: 0.25 if i == 0 else 0.6)
+    from mirror.tts import PocketTTS
+
+    tts = PocketTTS("m.onnx", g2p=FakeIpaG2P("ʃalˈom ʔolˈam."), en_ipa=None)
+    tts.synth("שלום עולם", "he")
+    assert len(record["calls"]) == 2  # 0.25 s < 45 % of 0.6 s
+
+
+def test_pocket_empty_text_is_silent(monkeypatch):
+    record = _fake_pocket(monkeypatch)
+    from mirror.tts import PocketTTS
+
+    tts = PocketTTS("m.onnx", g2p=FakeIpaG2P(""), en_ipa=None)
+    audio, sr, track = tts.synth_visemes("  ", "en")
+    assert len(audio) == 0 and track is None
+    audio, sr = tts.synth("שלום", "he")
+    assert len(audio) == 0 and record["calls"] == []
+
+
+def test_pocket_synth_visemes_estimates_a_track(monkeypatch):
+    _fake_pocket(monkeypatch)
+    from mirror.tts import PocketTTS
+
+    tts = PocketTTS("m.onnx", g2p=FakeIpaG2P("mˈama bˈaba."), en_ipa=lambda t: "mˈama.")
+    audio, sr, track = tts.synth_visemes("Mama.", "en")
+    assert track is not None and "A" in track.shapes
+    assert track.end == pytest.approx(len(audio) / sr)
+    audio, sr, track = tts.synth_visemes("אמא", "he")
+    assert track is not None and "A" in track.shapes
+
+
+def test_pocket_english_without_espeak_falls_back_to_loudness(monkeypatch):
+    _fake_pocket(monkeypatch)
+    from mirror.tts import PocketTTS
+
+    tts = PocketTTS("m.onnx", g2p=FakeIpaG2P(), en_ipa=lambda t: None)
+    audio, sr, track = tts.synth_visemes("Hello there.", "en")
+    assert len(audio) > 0 and track is None
+
+
+def test_pocket_language_views_plug_into_the_router(monkeypatch):
+    record = _fake_pocket(monkeypatch)
+    from mirror.tts import PocketTTS
+
+    tts = PocketTTS("m.onnx", g2p=FakeIpaG2P("mˈa."), en_ipa=lambda t: "hˈɛloʊ.")
+    router = TTSRouter(tts.for_lang("en"), tts.for_lang("he"))
+    _, sr, track = router.synth_visemes("Hello.", "en")
+    assert sr == POCKET_SR and track is not None
+    router.synth("מה", "he")
+    assert [c["phonemes"] for c in record["calls"]] == [False, True]
+    assert tts.for_lang("he").sample_rate == POCKET_SR
+
+
+def test_renikud_g2p_ipa_keeps_symbols_outside_the_voice(monkeypatch):
+    # Pocket reads any IPA (and Latin words); only pauses and markup are cleaned
+    _fake_renikud(monkeypatch, ipa="kmˈo *meχajˈeχ* (Hi) mmm… zˈo")
+    from mirror.tts import RenikudG2P
+
+    assert RenikudG2P("m.onnx").ipa("x") == "kmˈo meχajˈeχ Hi mmm, zˈo"
+
+
+@pytest.mark.slow
+def test_pocket_real():
+    pytest.importorskip("pocket_tts_onnx")
+    pytest.importorskip("sentencepiece")
+    if not POCKET_MODEL.exists():
+        pytest.skip("pocket model missing")
+    from mirror.tts import PocketTTS
+
+    tts = PocketTTS(str(POCKET_MODEL), voice="javert", g2p=FakeIpaG2P("ʃalˈom."))
+    audio, sr, track = tts.synth_visemes("Mirror, mirror on the wall.", "en")
+    assert sr == 24000 and len(audio) / sr > 1.0
+    assert np.abs(audio).max() > 0.01
+
+
+def _padded(lead_s, speech_s, tail_s):
+    z = lambda s: np.zeros(int(s * POCKET_SR), np.float32)  # noqa: E731
+    return np.concatenate([z(lead_s), _speech(speech_s), z(tail_s)])
+
+
+def test_pocket_trims_long_leading_and_trailing_silence(monkeypatch):
+    # Pocket's English voices often open with ~1 s of silence: dead air before every sentence
+    _fake_pocket(monkeypatch)
+    import mirror.tts as T
+
+    tts = T.PocketTTS("m.onnx", g2p=FakeIpaG2P(), en_ipa=None)
+    monkeypatch.setattr(tts._model, "create",
+                        lambda *a, **k: (_padded(1.0, 2.0, 0.8), POCKET_SR))
+    audio, sr = tts.synth("The path you seek.", "en")
+    assert len(audio) / sr == pytest.approx(T.POCKET_LEAD_S + 2.0 + T.POCKET_TAIL_S, abs=0.05)  # 20 ms envelope
+    assert np.abs(audio[: int(0.05 * sr)]).max() == 0  # a short lead-in is kept
+
+
+def test_pocket_truncation_check_ignores_silence(monkeypatch):
+    # a stop after "Hmm" padded by a second of silence is still a truncated clip
+    record = _fake_pocket(monkeypatch)
+    from mirror.tts import PocketTTS
+
+    tts = PocketTTS("m.onnx", g2p=FakeIpaG2P(), en_ipa=None)
+    takes = [_padded(1.0, 0.3, 0.1), _padded(0.3, 1.5, 0.1)]
+    monkeypatch.setattr(tts._model, "create", lambda *a, **k: (takes.pop(0), POCKET_SR))
+    audio, sr = tts.synth("Hmm. The mists are parting.", "en")
+    assert takes == [] and len(audio) / sr > 1.5

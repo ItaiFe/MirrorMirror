@@ -14,8 +14,10 @@ Clip = tuple[np.ndarray, int, "VisemeTrack | None"]
 
 
 class FillerBank:
-    def __init__(self, tts, lines: dict[str, list[str]], rng: random.Random | None = None):
+    def __init__(self, tts, lines: dict[str, list[str]], rng: random.Random | None = None,
+                 max_clip_s: float | None = None):
         self._tts = tts
+        self._max_clip_s = max_clip_s  # warn about longer clips (None: no check)
         self._lines = lines
         self._rng = rng or random.Random()
         self._clips: dict[str, list[Clip]] = {}
@@ -31,7 +33,11 @@ class FillerBank:
                 except Exception:
                     log.exception("could not synthesize filler %r", text)
                     continue
-                log.debug("filler (%s, %.2f s): %r", lang, len(samples) / sr, text)
+                seconds = len(samples) / sr
+                log.debug("filler (%s, %.2f s): %r", lang, seconds, text)
+                if self._max_clip_s is not None and seconds > self._max_clip_s:
+                    log.warning("filler (%s) is %.1f s, over the %.1f s budget: %r",
+                                lang, seconds, self._max_clip_s, text)
                 clips.append((samples, sr, track))
             self._clips[lang] = clips
 
