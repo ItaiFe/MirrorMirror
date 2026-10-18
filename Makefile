@@ -5,9 +5,12 @@ MODELS ?= models
 VENV := .venv/bin
 CONFIG ?= config/mac.toml
 STT_MODEL ?= $(MODELS)/ggml-small.bin
+# The oracle's model (the Hebrew bake-off runner-up: LLM_MODEL=$(MODELS)/<gemma-4-E2B gguf>)
 LLM_MODEL ?= $(MODELS)/gemma-3-4b-it-Q4_K_M.gguf
 WHISPER := whisper-server -m $(STT_MODEL) --port 8081
-LLAMA := llama-server -m $(LLM_MODEL) --port 8080 -c 8192 -ngl 99 -np 2 --cache-reuse 256
+# --swa-full: Gemma 3's sliding-window cache otherwise turns cache_reuse off, and the
+# English slot re-processes ~500 prompt tokens per turn (+~580 MiB KV at -c 8192 -np 2)
+LLAMA := llama-server -m $(LLM_MODEL) --port 8080 -c 8192 -ngl 99 -np 2 --cache-reuse 256 --swa-full
 LOGS ?= /tmp/mirror-dev
 
 test:

@@ -51,9 +51,52 @@ HEBREW_EXAMPLES: list[tuple[str, str]] = [
     ("ספר לי חידה.",
      "חידה בשבילכם: מה נעלם ברגע שאומרים את שמו? השקט. "
      "וכך גם העבר: ברגע שאתם מדברים עליו, הוא כבר צועד איתכם אל העתיד."),
+    # Singular questions (masculine, then feminine): the 4B model mirrors them and
+    # slips into the singular, so these show the answer staying plural.
+    ("תגיד לי, אני אצליח במה שתכננתי?",
+     "אני רואה זרע קטן שנטמן בחול, ומים כבר זורמים אליו בשקט. "
+     "המשיכו להשקות אותו בסבלנות, ואני יודע שהוא עוד יפתיע אתכם."),
+    ("אני קצת מפחדת, מה מחכה לי השנה?",
+     "אל תפחדו: גם בלילה הכי חשוך אני רואה כוכב אחד שנדלק בשבילכם. "
+     "השנה הזאת תיפתח לפניכם לאט, דלת אחרי דלת, ואתם תדעו מתי להיכנס."),
 ]
 _EXAMPLES_HEADER_HE = ("הדוגמאות הבאות מראות רק את הטון ואת צורת הפנייה. "
+                       "גם כששואלים בלשון יחיד, זכר או נקבה, התשובה בלשון רבים. "
                        "אל תחזור על הדימויים או על המילים שלהן, ואל תכתוב \"תשובה:\".")
+
+# Singular-address markers for a quick check of Hebrew replies (the example answers
+# in tests, generated replies in tools/hebrew_address_check.py). Heuristic: it
+# misses past-tense forms ("ששכחת") and some feminine את uses ("את יפה").
+_SINGULAR_WORDS = frozenset({
+    "אתה", "שאתה", "ואתה", "כשאתה", "שאת", "כשאת",
+    "לך", "שלך", "ושלך", "בך", "ממך", "אותך", "איתך", "אתך", "לפניך", "עליך", "אליך",
+    "סביבך", "בשבילך", "כמוך", "עבורך", "בתוכך",
+    # singular imperatives, masculine and feminine
+    "תגיד", "תגידי", "זכור", "זכרי", "תן", "תני", "שאל", "שאלי", "דע", "דעי",
+    "חפש", "חפשי", "הקשב", "הקשיבי", "הבט", "הביטי", "תסתכל", "תסתכלי",
+    "בוא", "בואי", "שים", "שימי", "תדאג", "תדאגי", "תפחד", "תפחדי",
+    "השאר", "השאירי", "קח", "קחי", "תשאל", "תשאלי", "תזכור", "תזכרי",
+})
+# words ending in ־יך that are not "your (singular)"
+_NOT_SUFFIX = frozenset({"צריך", "איך", "ממשיך", "להמשיך", "מעריך", "מדריך", "תהליך",
+                         "תאריך", "נסיך", "משליך", "להשליך", "מאריך", "להאריך"})
+_WORD = re.compile(r"[\u05d0-\u05ea]+")
+
+
+def singular_address(text: str) -> list[str]:
+    """The words in a Hebrew text that address one person (אתה, לך, שלך, זכרי, a
+    ־יך suffix...), in order. "את" counts unless it reads as the object marker:
+    followed by a ה- word or a possessed noun ("את הדרך", "את שמו")."""
+    words = _WORD.findall(text)
+    found = []
+    for i, w in enumerate(words):
+        if w == "את":
+            nxt = words[i + 1] if i + 1 < len(words) else ""
+            if not (nxt.startswith("ה") or nxt.endswith(("ו", "ם", "ן", "נו"))):
+                found.append(w)
+        elif w in _SINGULAR_WORDS or (w.endswith("יך") and w not in _NOT_SUFFIX):
+            found.append(w)
+    return found
 
 FALLBACK = {
     "en": "The mists are too thick right now. Ask me again in a moment.",

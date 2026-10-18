@@ -284,15 +284,15 @@ def test_clean_strips_copied_answer_label():
 def test_hebrew_prompt_has_plural_examples_before_world():
     from mirror.persona import HEBREW_EXAMPLES
 
-    assert len(HEBREW_EXAMPLES) == 3
+    assert len(HEBREW_EXAMPLES) == 5
     he = system_prompt("he", "WORLD", NOW)
     en = system_prompt("en", "WORLD", NOW)
     for question, answer in HEBREW_EXAMPLES:
         assert question in he and answer in he
         assert answer not in en
-        assert any(w in answer for w in ("אתם", "שאלו", "לכם"))
+        assert any(w in answer for w in ("אתם", "אתכם", "שאלו", "לכם"))
         assert he.index(answer) < he.index("WORLD")
-    assert len({a.split()[0] for _, a in HEBREW_EXAMPLES}) == 3  # varied openings
+    assert len({a.split()[0] for _, a in HEBREW_EXAMPLES}) == 5  # varied openings
     assert "רק את הטון" in he  # the examples are not to be copied
 
 
@@ -316,3 +316,79 @@ def test_stream_logs_first_token_time_even_when_cut(caplog):
                        .reply_stream([], "hi", "en"))
     assert out == ["One.", "Two."]
     assert "first token" in caplog.text
+
+
+# --- Hebrew address: singular questions, plural answers -----------------------------
+
+def test_singular_address_markers():
+    from mirror.persona import singular_address
+
+    assert singular_address("אני רואה אתכם, ומה שלכם יאיר לכם את הדרך.") == []
+    assert singular_address("ברגע שאומרים את שמו, הוא נעלם.") == []  # accusative את
+    assert singular_address("הכוכבים שלך מחכים לך.") == ["שלך", "לך"]
+    assert singular_address("אתה מוכן? זכרי את הלילה.") == ["אתה", "זכרי"]
+    assert singular_address("את לא לבד, והאור בעינייך.") == ["את", "בעינייך"]
+    assert singular_address("צריך ללכת בדרך הארוכה, איך שהוא.") == []  # not address
+    assert singular_address("שאלה: מה שאתה רואה?") == ["שאתה"]
+    assert singular_address("השאר את החששות שלכם במקדש.") == ["השאר"]
+
+
+def test_hebrew_examples_include_singular_questions_with_plural_answers():
+    from mirror.persona import HEBREW_EXAMPLES, singular_address
+
+    questions = [q for q, _ in HEBREW_EXAMPLES]
+    assert any(q.startswith("תגיד") for q in questions)  # masculine singular
+    assert any("מפחדת" in q for q in questions)  # feminine singular
+    he = system_prompt("he", "WORLD", NOW)
+    for question, answer in HEBREW_EXAMPLES:
+        assert answer in he
+        assert singular_address(answer) == [], (question, answer)
+    assert any("אני יודע" in a for _, a in HEBREW_EXAMPLES)  # masculine first person
+
+
+# --- llama-server flags --------------------------------------------------------------
+
+def _repo_file(*parts):
+    import os
+    with open(os.path.join(os.path.dirname(__file__), os.pardir, *parts),
+              encoding="utf-8") as f:
+        return f.read()
+
+
+def test_llama_server_keeps_full_swa_cache_in_dev_and_deploy():
+    """Gemma 3's sliding-window cache otherwise disables cache_reuse, and the
+    English slot re-processes ~500 prompt tokens per turn."""
+    make = next(l for l in _repo_file("Makefile").splitlines()
+                if l.startswith("LLAMA :="))
+    unit = next(l for l in _repo_file("deploy", "systemd", "mirror-llm.service")
+                .splitlines() if l.startswith("ExecStart="))
+    for cmd in (make, unit):
+        assert "--swa-full" in cmd.split()
+        assert re.search(r"-c 8192\b", cmd) and re.search(r"-np 2\b", cmd)
+        assert "--cache-reuse 256" in cmd
+
+
+def test_llm_model_file_is_one_setting():
+    """The model file is set in one place per launcher (Gemma 4 E2B is the bake-off
+    runner-up), not buried in the command line."""
+    assert re.search(r"^LLM_MODEL \?= \$\(MODELS\)/gemma-3-4b-it-Q4_K_M\.gguf$",
+                     _repo_file("Makefile"), re.MULTILINE)
+    unit = _repo_file("deploy", "systemd", "mirror-llm.service")
+    assert "Environment=LLM_MODEL=gemma-3-4b-it-Q4_K_M.gguf" in unit
+    exec_line = next(l for l in unit.splitlines() if l.startswith("ExecStart="))
+    assert "-m %h/mirror-models/${LLM_MODEL} " in exec_line
+
+
+def test_hebrew_address_check_tool_reports_rate(capsys):
+    import os
+    import sys
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), os.pardir, "tools"))
+    import hebrew_address_check
+
+    replies = iter(["אני רואה אתכם.", "הכוכבים שלך זורחים.", "שאלו את הרוח."])
+    with patch("mirror.llm.requests.post",
+               side_effect=lambda *a, **kw: _ok(next(replies))):
+        assert hebrew_address_check.main(["--n", "3", "--url", "http://x"]) == 0
+    out = capsys.readouterr().out
+    assert "SINGULAR שלך" in out
+    assert "singular address in 1/3 replies (33%)" in out
