@@ -87,7 +87,7 @@ uv pip install --python .venv -e '.[pocket]'
   terms forbid cloning or imitating a voice without its owner's explicit consent.**
   The oracle's own voice is `models/voices/mirror.npy`, cloned from a synthetic voice
   designed in ElevenLabs (models/ isn't in git): copy it with
-  `scp models/voices/mirror.npy ORIN:~/MirrorMirror/models/voices/`. Measured on an M2
+  `scp models/voices/mirror.npy mirror@ORIN:mirror-models/mirror-voice.npy`. Measured on an M2
   (2 threads): RTF 0.22 (en) / 0.25-0.32 (he), ~0.9 GB peak RSS with RenikudPlus loaded.
 
 Differences from Piper: Pocket gives no phoneme timings, so the mouth track is estimated

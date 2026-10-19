@@ -23,7 +23,7 @@ mms_model_he = "facebook/mms-tts-heb"
 engine = "piper"          # "piper" | "pocket" (Pocket TTS for both languages; off until measured on the Orin)
 pocket_model = "/home/mirror/mirror-models/pocket-tts-english-ipa.onnx"
 pocket_voice = "javert"   # built in: javert (CC0, deepest), michael (CC-BY), marius (CC0), ...
-# pocket_voice_file = "/home/mirror/mirror-models/my-voice.npy"   # a cloned voice (tools/clone_voice.py)
+# pocket_voice_file = "/home/mirror/mirror-models/mirror-voice.npy"   # the oracle's cloned voice (README: Pocket TTS)
 pocket_threads = 2
 voice_speed = 1.0        # < 1 = deeper and slower (0.86 = the "villain" sample); 1.0 = off
 voice_room = 0.0         # 0..1 small-room echo (1.0 = the "villain" sample); 0 = off
