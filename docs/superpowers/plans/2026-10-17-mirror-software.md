@@ -642,3 +642,33 @@ Commit: `feat: ivrit-ai Whisper turbo STT with script-based language detection`
 - [ ] Smoke on the Mac, with no servers needed: synth plus estimated visemes for 3 English + 3 Hebrew lines with engine = pocket, saving WAVs and printing the RTF.
 
 Commit: `feat: optional Pocket TTS engine with estimated visemes`
+
+---
+
+### Task 24: systemd watchdog for the voice and face processes
+
+**Why:** systemd restarts a crashed process, but not a hung one. If the voice loop or the face loop wedges (an audio or driver deadlock), the mirror goes silent or frozen for the rest of the night.
+
+**Files:** `mirror/watchdog.py` (new), `mirror/voice_main.py`, `mirror/face/app.py`, `deploy/systemd/mirror-voice.service`, `deploy/systemd/mirror-face.service`, tests.
+
+- `watchdog.notify(msg: str) -> bool` sends to the `$NOTIFY_SOCKET` datagram socket (abstract `@` names included) with stdlib `socket` only, no new dependency. It returns False, a no-op, when the variable is unset (the Mac). `ready()` sends `READY=1`; `ping()` sends `WATCHDOG=1`, rate-limited to at most once per `WATCHDOG_USEC/4` (read from the env; default 15 s).
+- **voice:** `ready()` once after "ready", and `ping()` from the main loop on every tick. A main loop stuck in on_segment for more than the timeout gets restarted. That's acceptable, since a single answer is bounded far below 60 s by the existing budgets.
+- **face:** `ready()` after the first frame, `ping()` each frame (rate-limited).
+- **Units:** `Type=notify`, `WatchdogSec=60`, `NotifyAccess=main`; keep `Restart=always`. Make sure `TimeoutStartSec` covers model loading (voice already has 200 s).
+- **Tests:** notify to a real temporary AF_UNIX datagram socket (path form) receives `READY=1`/`WATCHDOG=1`; unset env gives a no-op; the rate limit holds; voice_main calls ready/ping (with a fake watchdog); unit files contain the new keys.
+
+Commit: `feat: systemd watchdog pings from voice and face`
+
+### Task 25: Idle lures — the oracle beckons when no one is around
+
+**Why:** a lone mirror on the playa needs to draw people in. When it has been idle for a while, it murmurs a short pre-recorded line, in either language at random, with the face speaking it.
+
+**Files:** `mirror/persona.py` (`LURES`), `mirror/fillers.py` (reuse FillerBank for lures, or a sibling `LureBank`), `mirror/conversation.py` (a lure in `tick()` when idle), `mirror/config.py` + TOMLs (`conversation.lures_enabled = true`, `lure_min_idle_s = 120`, `lure_interval_s = [180, 420]`, `lure_quiet_hours = []` as a list of "HH:MM-HH:MM" local-time windows when lures are off; default empty), tests.
+
+- **Copy (oracle voice, ≤ 3 s each):** en "Come closer, traveller… the glass has something to show you.", "I see you there. Ask, and the mirror will answer.", "Mirror, mirror… say the words, and I will wake.", "The dust remembers you. Come, ask me anything."; he "התקרבו, נוסעים… לזכוכית יש משהו להראות לכם.", "אני רואה אתכם. שאלו, והמראה תענה.", "מראה, מראה… אמרו את המילים, ואתעורר.", "האבק זוכר אתכם. בואו, שאלו אותי הכול."
+- **Controller:** in `tick()`, when state is IDLE, not busy, lures are enabled, now is outside quiet hours, idle time ≥ `lure_min_idle_s`, and the randomized interval has elapsed since the last lure or interaction, play a lure. It goes through the same play path as a filler (SPEAKING with visemes, then back to IDLE), uses the busy flag so segments are dropped while it speaks, never repeats the same line twice in a row, and alternates languages randomly. Any interaction resets the idle timer. Lure playback must not change the conversation history.
+- **Tests:** no lure before min idle; lure after min idle + interval; none during quiet hours (including windows crossing midnight); none while busy or not IDLE; a speech segment after a lure is handled normally; history unchanged; an injectable clock throughout.
+
+Commit: `feat: idle lures — the oracle beckons passers-by`
+
+**Order:** 24 then 25 (both touch voice_main.py / conversation.py).
