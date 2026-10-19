@@ -347,3 +347,300 @@ def test_e2e_and_hebrew_fail_fast_without_servers():
     ctx.results = [bc.Result("stt server", bc.FAIL, ""), bc.Result("llm server", bc.FAIL, "")]
     assert [r.status for r in bc.check_e2e(ctx)] == ["FAIL", "FAIL"]
     assert bc.check_hebrew(ctx).status == "FAIL"
+
+
+# --- review fixes: hard deadlines -----------------------------------------------------
+SLEEPER = [sys.executable, "-c", "import time; time.sleep(30)"]
+
+
+def test_tegrastats_that_prints_nothing_returns_none_within_the_deadline():
+    t0 = time.monotonic()
+    assert bc._tegrastats_line(timeout_s=1.0, cmd=SLEEPER) is None
+    assert time.monotonic() - t0 < 4.0
+
+
+def test_tegrastats_returns_its_first_line_early():
+    cmd = [sys.executable, "-c",
+           "import sys, time; print('RAM 7000/7620MB SWAP 0/3810MB'); sys.stdout.flush(); "
+           "time.sleep(30)"]
+    t0 = time.monotonic()
+    assert bc._tegrastats_line(timeout_s=3.0, cmd=cmd) == "RAM 7000/7620MB SWAP 0/3810MB"
+    assert time.monotonic() - t0 < 2.5
+
+
+def test_run_probe_kills_a_hung_child_and_keeps_its_partial_report():
+    cmd = [sys.executable, "-c",
+           "import sys, time; print('PROBE {\"name\": \"XVF3800\", \"stage\": \"opened\", "
+           "\"rate\": 16000, \"channels\": 2}'); sys.stdout.flush(); time.sleep(30)"]
+    t0 = time.monotonic()
+    probe = bc._run_probe("input", "unused.toml", timeout_s=1.0, cmd=cmd)
+    assert time.monotonic() - t0 < 4.0
+    assert probe["name"] == "XVF3800" and "hung after stage 'opened'" in probe["error"]
+    r = bc.audio_result("input", probe)
+    assert r.status == "FAIL" and "16000 Hz x 2 ch" in r.reason
+
+
+def test_run_child_reports_a_timeout():
+    t0 = time.monotonic()
+    out = bc._run_child(SLEEPER, 0.5)
+    assert out["timed_out"] and time.monotonic() - t0 < 4.0
+
+
+@pytest.mark.parametrize("turns,statuses,abort", [
+    # 2 LLM errors in a row: the third turn never runs
+    ([{"llm_error": True}, {"llm_error": True}, {"ok": True}], ["FAIL", "FAIL", "FAIL"],
+     "2 LLM errors in a row"),
+    ([{"ok": True}, {"llm_error": True}, {"ok": True}], ["PASS", "FAIL", "PASS"], None),
+])
+def test_run_turns_aborts_after_consecutive_llm_errors(turns, statuses, abort):
+    ran = []
+
+    def make(spec, i):
+        def fn():
+            ran.append(i)
+            if spec.get("ok"):
+                return {"heard": "mirror mirror", "wake": True, "lang": "en",
+                        "filler_s": 0.5, "first_sentence_s": 2.0}
+            return {"heard": "mirror mirror", "wake": True, "lang": "en",
+                    "first_sentence_s": None, "llm_error": True}
+        return fn
+
+    specs = [(f"t{i}", "en", make(s, i)) for i, s in enumerate(turns)]
+    res = bc.run_turns(specs, budget_s=10.0)
+    assert [r.status for r in res] == statuses
+    if abort:
+        assert ran == [0, 1] and abort in res[2].reason
+    else:
+        assert ran == [0, 1, 2]
+
+
+def test_run_turns_stops_a_stalled_turn_at_the_budget():
+    def stalled():
+        time.sleep(5)
+        return {}
+
+    def never():
+        raise AssertionError("must not run after the budget is spent")
+
+    t0 = time.monotonic()
+    res = bc.run_turns([("e2e English", "en", stalled), ("e2e Hebrew", "he", never)],
+                       budget_s=0.5)
+    assert time.monotonic() - t0 < 2.0
+    assert [r.status for r in res] == ["FAIL", "FAIL"]
+    assert "budget" in res[0].reason and "budget" in res[1].reason
+
+
+def test_hebrew_run_check_aborts_after_two_errors_in_a_row():
+    import hebrew_address_check as hac
+    from mirror.llm import LLMError
+
+    calls = []
+
+    class Down:
+        def reply(self, history, q, lang):
+            calls.append(q)
+            raise LLMError("read timeout")
+
+    res = hac.run_check(Down(), 10, show=lambda s: None, max_consecutive_errors=2)
+    assert len(calls) == 2 and res["failed"] == 2
+    assert "2 errors in a row" in res["aborted"]
+    r = bc.hebrew_result(res)
+    assert r.status == "FAIL" and "2 errors in a row" in r.reason
+
+
+def test_hebrew_run_check_stops_at_its_budget():
+    import hebrew_address_check as hac
+
+    now = [0.0]
+
+    class Slow:
+        def reply(self, history, q, lang):
+            now[0] += 50.0
+            return "אתם תמצאו."
+
+    res = hac.run_check(Slow(), 10, show=lambda s: None, budget_s=120.0,
+                        clock=lambda: now[0])
+    assert res["answered"] == 3 and "budget" in res["aborted"]
+    r = bc.hebrew_result(res)
+    assert r.status == "WARN" and "3/3" not in r.reason and "budget" in r.reason
+
+
+# --- review fixes: systemd Environment= parsing and precedence ---------------------------------
+@pytest.mark.parametrize("text,want", [
+    ("Environment=STT_MODEL=a.bin", "a.bin"),
+    ("Environment=FOO=1 STT_MODEL=b.bin BAR=2", "b.bin"),
+    ('Environment="STT_MODEL=c d.bin" FOO=1', "c d.bin"),
+    ("Environment='FOO=x' 'STT_MODEL=e.bin'", "e.bin"),
+    ("Environment=STT_MODEL=a.bin\nEnvironment=STT_MODEL=f.bin", "f.bin"),
+    ("Environment=STT_MODEL=a.bin\nEnvironment=\n", None),  # an empty assignment resets
+    ("Environment=STT_MODEL=a.bin\nEnvironment=\nEnvironment=STT_MODEL=g.bin", "g.bin"),
+    ("# Environment=STT_MODEL=commented.bin\nEnvironment=STT_MODEL=h.bin", "h.bin"),
+    ("Environment=STT_MODELX=no.bin", None),
+])
+def test_unit_env_forms(text, want):
+    assert bc._unit_env(text, "STT_MODEL") == want
+
+
+def _units(tmp_path, repo_stt="ivrit.bin", override=None, installed=None):
+    repo = tmp_path / "repo"
+    user = tmp_path / "user"
+    repo.mkdir()
+    user.mkdir()
+    (repo / "mirror-stt.service").write_text(f"[Service]\nEnvironment=STT_MODEL={repo_stt}\n")
+    (repo / "mirror-llm.service").write_text("[Service]\nEnvironment=LLM_MODEL=gemma.gguf\n")
+    if installed:
+        (user / "mirror-stt.service").write_text(f"[Service]\nEnvironment=STT_MODEL={installed}\n")
+    if override:
+        d = user / "mirror-stt.service.d"
+        d.mkdir()
+        (d / "override.conf").write_text(f"[Service]\nEnvironment=STT_MODEL={override}\n")
+    return str(repo), str(user)
+
+
+def test_server_model_names_dropin_beats_the_unit(tmp_path):
+    repo, user = _units(tmp_path, override="ggml-small.bin")
+    names = bc.server_model_names(prefer_units=True, env={}, units_dir=user, repo_units_dir=repo)
+    assert names["stt"]["name"] == "ggml-small.bin"
+    assert "override.conf" in names["stt"]["source"]
+    assert names["llm"] == {"name": "gemma.gguf", "source": os.path.join(repo, "mirror-llm.service")}
+
+
+def test_server_model_names_installed_unit_replaces_the_repo_copy(tmp_path):
+    repo, user = _units(tmp_path, installed="installed.bin")
+    names = bc.server_model_names(prefer_units=True, env={}, units_dir=user, repo_units_dir=repo)
+    assert names["stt"]["name"] == "installed.bin"
+
+
+def test_server_model_names_env_precedence(tmp_path):
+    repo, user = _units(tmp_path, override="ggml-small.bin")
+    env = {"STT_MODEL": "models/from-env.bin"}
+    # the Orin: what systemd will actually run wins over a stray shell variable
+    on_orin = bc.server_model_names(prefer_units=True, env=env, units_dir=user,
+                                    repo_units_dir=repo)
+    assert on_orin["stt"]["name"] == "ggml-small.bin"
+    # the Mac: make servers-mac takes STT_MODEL from the environment
+    on_mac = bc.server_model_names(prefer_units=False, env=env, units_dir=user,
+                                   repo_units_dir=repo)
+    assert on_mac["stt"] == {"name": "from-env.bin", "source": "$STT_MODEL"}
+    # without an env value the units decide on the Mac too
+    assert bc.server_model_names(prefer_units=False, env={}, units_dir=user,
+                                 repo_units_dir=repo)["stt"]["name"] == "ggml-small.bin"
+
+
+# --- review fixes: display, serial, memory dispatch -----------------------------------------
+XRANDR = ("Screen 0: minimum 8 x 8, current 1280 x 720\n"
+          "DP-1 connected primary 1280x720+0+0 (normal left) 0mm x 0mm\n")
+
+
+def _orin_display(monkeypatch, stdout, rc=0):
+    monkeypatch.setattr(bc, "is_orin", lambda: True)
+    monkeypatch.setattr(bc.shutil, "which", lambda name: "/usr/bin/" + name)
+    monkeypatch.setenv("DISPLAY", ":0")
+    seen = {}
+
+    def fake_child(cmd, timeout_s, env=None):
+        seen["cmd"], seen["env"] = cmd, env
+        return {"rc": rc, "stdout": stdout, "stderr": "", "timed_out": False}
+
+    monkeypatch.setattr(bc, "_run_child", fake_child)
+    return seen
+
+
+def test_check_display_warns_on_the_wrong_mode(monkeypatch):
+    seen = _orin_display(monkeypatch, XRANDR)
+    r = bc.check_display(bc.Context(cfg=Config()))
+    assert seen["cmd"] == ["xrandr"]
+    assert r.status == "WARN" and "1280x720" in r.reason and "1920x1080" in r.reason
+
+
+def test_check_display_passes_at_1920x1080(monkeypatch):
+    _orin_display(monkeypatch, XRANDR.replace("1280x720", "1920x1080"))
+    r = bc.check_display(bc.Context(cfg=Config()))
+    assert r.status == "PASS" and r.details["output"] == "DP-1"
+
+
+def test_check_display_skips_off_the_orin(monkeypatch):
+    monkeypatch.setattr(bc, "is_orin", lambda: False)
+    assert bc.check_display(bc.Context(cfg=Config())).status == "SKIP"
+
+
+def test_check_serial_sends_the_idle_preset(monkeypatch, tmp_path):
+    import types
+
+    port = tmp_path / "ttyUSB0"
+    port.write_text("")
+    sent = []
+
+    class FakeSerial:
+        def __init__(self, path, baud, timeout=None, write_timeout=None):
+            sent.append(("open", path, baud, write_timeout))
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            sent.append("close")
+
+        def write(self, data):
+            sent.append(data)
+
+        def flush(self):
+            pass
+
+    monkeypatch.setitem(sys.modules, "serial", types.SimpleNamespace(Serial=FakeSerial))
+    cfg = Config()
+    cfg.lights.kind, cfg.lights.serial_port = "wled", str(port)
+    r = bc.check_serial(bc.Context(cfg=cfg))
+    assert r.status == "PASS"
+    assert sent == [("open", str(port), 115200, 1), b'{"ps":1}\n', "close"]
+
+
+def test_check_serial_fails_on_a_missing_port():
+    cfg = Config()
+    cfg.lights.kind, cfg.lights.serial_port = "wled", "/dev/definitely-not-a-port"
+    assert bc.check_serial(bc.Context(cfg=cfg)).status == "FAIL"
+
+
+VM_STAT = ("Mach Virtual Memory Statistics: (page size of 16384 bytes)\n"
+           "Pages free:                               10000.\n"
+           "Pages inactive:                           10000.\n")
+FREE = ("               total        used        free      shared  buff/cache   available\n"
+        "Mem:            7620        7300         100          30         200         280\n")
+
+
+def _fake_cmds(monkeypatch, outputs, calls):
+    def fake(cmd, timeout_s=10.0):
+        calls.append(cmd[0])
+        return outputs[cmd[0]]
+    monkeypatch.setattr(bc, "_cmd_output", fake)
+
+
+def test_check_memory_on_the_mac_uses_vm_stat(monkeypatch):
+    calls = []
+    monkeypatch.setattr(bc, "_platform", lambda: "darwin")
+    _fake_cmds(monkeypatch, {"vm_stat": VM_STAT,
+                             "sysctl": "total = 2048.00M  used = 100.00M  free = 1948.00M"},
+               calls)
+    r = bc.check_memory(bc.Context(cfg=Config()))
+    assert calls == ["vm_stat", "sysctl"]
+    assert r.status == "WARN"  # 312 MB
+    assert r.details["available_mb"] == round(20000 * 16384 / 1048576)
+    assert "swap used 100 MB" in r.reason
+
+
+def test_check_memory_on_the_orin_uses_free_and_tegrastats(monkeypatch):
+    calls = []
+    monkeypatch.setattr(bc, "_platform", lambda: "linux")
+    monkeypatch.setattr(bc, "is_orin", lambda: True)
+    monkeypatch.setattr(bc.shutil, "which", lambda name: "/usr/bin/" + name)
+    monkeypatch.setattr(bc, "_tegrastats_line", lambda: "RAM 7300/7620MB SWAP 0/3810MB")
+    _fake_cmds(monkeypatch, {"free": FREE}, calls)
+    r = bc.check_memory(bc.Context(cfg=Config()))
+    assert calls == ["free"]
+    assert r.status == "FAIL" and "280 MB" in r.reason and "7300/7620MB" in r.reason
+
+
+def test_default_wav_cache_is_in_the_repo_and_gitignored():
+    assert bc.DEFAULT_CACHE == os.path.join(bc.REPO, ".cache", "bringup")
+    with open(os.path.join(bc.REPO, ".gitignore"), encoding="utf-8") as f:
+        assert ".cache/" in f.read().split()

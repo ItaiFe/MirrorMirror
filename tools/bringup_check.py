@@ -16,9 +16,12 @@ a pointer into the README:
  5. servers     whisper-server and llama-server answer /health (never started here)
  6. memory      available RAM (free -m + one tegrastats line; vm_stat on the Mac)
  7. end-to-end  an English and a Hebrew wake+question WAV (synthesized with the
-                repo's voices, cached) through the real VAD -> STT -> wake -> LLM
+                repo's voices, cached in .cache/bringup) through the real VAD -> STT -> wake -> LLM
                 (streaming) -> TTS path, with tools/record_demo.py's fake player
  8. hebrew      tools/hebrew_address_check.py, 10 questions: singular-address rate
+
+7 and 8 have total budgets (120 s / 180 s) and stop after 2 LLM errors in a row; every
+child process (audio probes, xrandr, tegrastats, free) has a hard deadline.
 
 --quick skips 7-8; --skip-audio skips 2. Exit code 0 when nothing FAILed.
 Stdlib + the repo's own dependencies only; Python 3.10-compatible.
@@ -33,8 +36,10 @@ import os
 import platform
 import re
 import shutil
+import shlex
 import subprocess
 import sys
+import threading
 import time
 import traceback
 from dataclasses import asdict, dataclass, field
@@ -56,6 +61,11 @@ MEM_WARN_MB = 500
 E2E_PASS_S = 6.0
 E2E_WARN_S = 10.0
 HEBREW_N = 10
+E2E_BUDGET_S = 120.0     # the whole e2e check, warmups included
+HEBREW_BUDGET_S = 180.0  # checked between questions; one request may overrun by its timeout
+MAX_LLM_ERRORS = 2       # LLM errors in a row before a check gives up on the server
+REAP_S = 2.0             # how long to wait for a killed child to go away
+DEFAULT_CACHE = os.path.join(REPO, ".cache", "bringup")  # gitignored
 HEBREW_WARN_SINGULAR = 2  # more than this many singular replies out of 10: WARN
 
 # README pointers (section names, so they survive edits)
@@ -86,6 +96,66 @@ JSON_MIN_SIZE = 200            # voice configs
 
 def is_orin() -> bool:
     return os.path.exists("/etc/nv_tegra_release")
+
+
+def _platform() -> str:
+    return sys.platform
+
+
+# Caveat for every child below: a process stuck in uninterruptible sleep (state D,
+# e.g. inside a wedged ALSA/USB driver) ignores SIGKILL until the kernel call returns.
+# So after a kill we wait at most REAP_S for it and then walk away (it stays a zombie
+# or keeps running); the check reports the hang either way and never blocks on it.
+def _run_child(cmd: list, timeout_s: float, env: Optional[dict] = None) -> dict:
+    """Run cmd with a hard deadline. {"rc", "stdout", "stderr", "timed_out"}; on a
+    timeout the child is killed and whatever it printed so far is returned."""
+    try:
+        p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                             stdin=subprocess.DEVNULL, env=env, cwd=REPO)
+    except OSError as e:
+        return {"rc": None, "stdout": "", "stderr": str(e), "timed_out": False}
+    timed_out = False
+    try:
+        out, err = p.communicate(timeout=timeout_s)
+    except subprocess.TimeoutExpired:
+        timed_out = True
+        p.kill()
+        try:
+            out, err = p.communicate(timeout=REAP_S)  # reap; collects the partial output
+        except subprocess.TimeoutExpired as e:  # D state: give up on it
+            out, err = e.stdout or b"", e.stderr or b""
+            for f in (p.stdout, p.stderr):
+                try:
+                    f.close()
+                except Exception:  # noqa: BLE001
+                    pass
+    return {"rc": p.returncode, "stdout": (out or b"").decode("utf-8", "replace"),
+            "stderr": (err or b"").decode("utf-8", "replace"), "timed_out": timed_out}
+
+
+def _cmd_output(cmd: list, timeout_s: float = 10.0) -> str:
+    """stdout of a short command ('' if it fails or hangs)."""
+    r = _run_child(cmd, timeout_s)
+    return "" if r["timed_out"] else r["stdout"]
+
+
+def call_with_budget(fn: Callable, budget_s: float):
+    """(finished, value, exception) of fn() run on a daemon thread for at most budget_s.
+    An unfinished call is abandoned (its thread runs on in the background)."""
+    box: dict = {}
+
+    def run():
+        try:
+            box["value"] = fn()
+        except BaseException as e:  # noqa: BLE001 - handed back to the caller
+            box["exc"] = e
+
+    t = threading.Thread(target=run, name="budgeted", daemon=True)
+    t.start()
+    t.join(max(0.0, budget_s))
+    if t.is_alive():
+        return False, None, None
+    return True, box.get("value"), box.get("exc")
 
 
 # --------------------------------------------------------------------------
@@ -198,34 +268,72 @@ def print_result(r: Result) -> None:
 # 1. config and model files
 # --------------------------------------------------------------------------
 def _unit_env(unit_text: str, var: str) -> Optional[str]:
-    """The last `Environment=VAR=value` in a systemd unit (or drop-in) text."""
+    """VAR's value after systemd reads these unit (and drop-in) lines in order:
+    `Environment=` takes several space-separated, optionally quoted, assignments;
+    later ones win; an empty `Environment=` resets everything set before it."""
     val = None
     for line in unit_text.splitlines():
-        m = re.match(rf"\s*Environment=\"?{var}=([^\"\s]+)", line)
-        if m:
-            val = m.group(1)
+        line = line.strip()
+        if not line.startswith("Environment="):
+            continue
+        rest = line[len("Environment="):].strip()
+        if not rest:
+            val = None
+            continue
+        try:
+            words = shlex.split(rest)
+        except ValueError:  # unbalanced quotes: systemd would reject it too
+            continue
+        for w in words:
+            k, sep, v = w.partition("=")
+            if sep and k == var:
+                val = v
     return val
 
 
-def server_model_names() -> dict:
-    """{"stt": file, "llm": file}: the env, else the user's drop-in override, else the
-    repo's unit (deploy/systemd/mirror-{stt,llm}.service)."""
+SERVER_UNITS = (("stt", "mirror-stt", "STT_MODEL"), ("llm", "mirror-llm", "LLM_MODEL"))
+
+
+def server_model_names(prefer_units: bool, env: Optional[dict] = None,
+                       units_dir: Optional[str] = None,
+                       repo_units_dir: Optional[str] = None) -> dict:
+    """{"stt"|"llm": {"name": model file, "source": where it came from}}.
+
+    The units: the installed user unit (else the repo's copy in deploy/systemd), then
+    its drop-ins (*.conf, in name order), read like systemd does. prefer_units (the
+    Orin): the units win over $STT_MODEL/$LLM_MODEL in this shell, which systemd
+    never sees. Otherwise (the Mac's make servers-mac) the environment wins."""
+    env = os.environ if env is None else env
+    units_dir = units_dir or os.path.expanduser("~/.config/systemd/user")
+    repo_units_dir = repo_units_dir or os.path.join(REPO, "deploy", "systemd")
     out = {}
-    for key, unit, var in (("stt", "mirror-stt", "STT_MODEL"), ("llm", "mirror-llm", "LLM_MODEL")):
-        name = None
-        for path in (os.path.join(REPO, "deploy", "systemd", f"{unit}.service"),
-                     os.path.expanduser(f"~/.config/systemd/user/{unit}.service.d/override.conf")):
+    for key, unit, var in SERVER_UNITS:
+        installed = os.path.join(units_dir, f"{unit}.service")
+        base = installed if os.path.exists(installed) else os.path.join(
+            repo_units_dir, f"{unit}.service")
+        dropin_dir = os.path.join(units_dir, f"{unit}.service.d")
+        dropins = sorted(os.path.join(dropin_dir, n) for n in _listdir(dropin_dir)
+                         if n.endswith(".conf"))
+        name, source, text = None, None, ""
+        for path in [base] + dropins:
             try:
                 with open(path, encoding="utf-8") as f:
-                    name = _unit_env(f.read(), var) or name
+                    text += f.read() + "\n"
             except OSError:
-                pass
-        out[key] = os.path.basename(os.environ.get(var) or name or "")
+                continue
+            got = _unit_env(text, var)
+            if got != name:
+                name, source = got, path
+        from_env = env.get(var)
+        if from_env and (not prefer_units or not name):
+            name, source = from_env, f"${var}"
+        out[key] = {"name": os.path.basename(name or ""), "source": source}
     return out
 
 
-def model_files(cfg) -> list[tuple[str, str]]:
-    """(label, path) of every model file the config and the server units use."""
+def model_files(cfg, names: Optional[dict] = None) -> list[tuple[str, str]]:
+    """(label, path) of every model file the config and the server units use
+    (names: server_model_names(); looked up with the env winning if not given)."""
     t = cfg.tts
     models_dir = cfg.models_dir
     files = [("vad", os.path.join(models_dir, "silero_vad.onnx"))]
@@ -243,10 +351,11 @@ def model_files(cfg) -> list[tuple[str, str]]:
         files.append(("pocket model", t.pocket_model))
         if t.pocket_voice_file:
             files.append(("pocket voice file", t.pocket_voice_file))
-    names = server_model_names()
+    if names is None:
+        names = server_model_names(prefer_units=False)
     for key, label in (("stt", "whisper model"), ("llm", "llm model")):
-        if names.get(key):
-            files.append((label, os.path.join(models_dir, names[key])))
+        if names.get(key, {}).get("name"):
+            files.append((label, os.path.join(models_dir, names[key]["name"])))
     return files
 
 
@@ -285,7 +394,11 @@ def check_config(ctx: Context) -> Result:
         return Result("config", FAIL, f"{ctx.config_path} does not load: {e}",
                       "fix the TOML (compare config/orin.toml in git)")
     cfg = ctx.cfg
-    files = model_files(cfg)
+    prefer_units = is_orin() or os.path.basename(ctx.config_path).startswith("orin")
+    names = server_model_names(prefer_units)
+    files = model_files(cfg, names)
+    servers = ", ".join(f"{k} {v['name']} (from {v['source']})" for k, v in names.items()
+                        if v["name"])
     missing, small, sizes = check_files(files)
     extra = []
     world = resolve_repo_path(cfg.conversation.world_file, ctx.config_path)
@@ -295,7 +408,8 @@ def check_config(ctx: Context) -> Result:
     if cfg.face.renderer == "sprite" and not os.path.isdir(bank):
         extra.append(f"face bank {bank}")
     hf = os.path.join(cfg.models_dir, "hf")
-    details = {"config": ctx.config_path, "files": dict(files), "sizes": sizes}
+    details = {"config": ctx.config_path, "files": dict(files), "sizes": sizes,
+               "server_models": names}
     if missing or small or extra:
         bad = missing + small + extra
         return Result("config", FAIL, f"{len(bad)} bad file(s): " + "; ".join(bad),
@@ -304,8 +418,8 @@ def check_config(ctx: Context) -> Result:
         return Result("config", WARN, f"{len(files)} model files OK, but no HF cache at {hf}",
                       FIX_SETUP + " (fetch_models.sh fills hf/)", details)
     total = sum(sizes.values()) / 1e9
-    return Result("config", PASS, f"loaded; {len(files)} model files present ({total:.1f} GB)",
-                  details=details)
+    return Result("config", PASS, f"loaded; {len(files)} model files present ({total:.1f} GB);"
+                  f" servers: {servers or 'none found'}", details=details)
 
 
 # --------------------------------------------------------------------------
@@ -362,20 +476,18 @@ def parse_probe(stdout) -> dict:
     return out
 
 
-def _run_probe(kind: str, config_path: str, timeout_s: float = AUDIO_TIMEOUT_S) -> dict:
-    cmd = [sys.executable, os.path.abspath(__file__), "--config", config_path,
-           "--probe-audio", kind]
-    try:
-        p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_s, cwd=REPO)
-    except subprocess.TimeoutExpired as e:
-        out = parse_probe(e.stdout)
+def _run_probe(kind: str, config_path: str, timeout_s: float = AUDIO_TIMEOUT_S,
+               cmd: Optional[list] = None) -> dict:
+    cmd = cmd or [sys.executable, os.path.abspath(__file__), "--config", config_path,
+                  "--probe-audio", kind]
+    r = _run_child(cmd, timeout_s)
+    out = parse_probe(r["stdout"])
+    if r["timed_out"]:
         out["error"] = (f"hung after stage {out.get('stage', 'device lookup')!r}: "
                         f"killed after {timeout_s:.0f} s")
-        return out
-    out = parse_probe(p.stdout)
-    if not out.get("ok") and "error" not in out and out.get("matched", True):
-        tail = (p.stderr.strip().splitlines() or ["no output"])[-1]
-        out["error"] = f"probe exited {p.returncode}: {tail}"
+    elif not out.get("ok") and "error" not in out and out.get("matched", True):
+        tail = (r["stderr"].strip().splitlines() or ["no output"])[-1]
+        out["error"] = f"probe exited {r['rc']}: {tail}"
     return out
 
 
@@ -473,13 +585,12 @@ def check_display(ctx: Context) -> Result:
     if shutil.which("xrandr") is None:
         return Result("display", WARN, "xrandr not installed (apt install x11-xserver-utils)",
                       FIX_DISPLAY)
-    try:
-        p = subprocess.run(["xrandr"], capture_output=True, text=True, timeout=10, env=env)
-    except subprocess.TimeoutExpired:
+    p = _run_child(["xrandr"], 10.0, env=env)
+    if p["timed_out"]:
         return Result("display", WARN, "xrandr hung", FIX_DISPLAY)
-    mode = parse_xrandr(p.stdout)
-    if p.returncode or mode is None:
-        why = p.stderr.strip().splitlines()[-1] if p.stderr.strip() else "no connected output"
+    mode = parse_xrandr(p["stdout"])
+    if p["rc"] or mode is None:
+        why = p["stderr"].strip().splitlines()[-1] if p["stderr"].strip() else "no connected output"
         return Result("display", WARN, f"xrandr on {env['DISPLAY']}: {why}", FIX_DISPLAY)
     out, w, h = mode
     det = {"output": out, "width": w, "height": h, "display": env["DISPLAY"]}
@@ -574,24 +685,34 @@ def mac_available_mb(vm: dict) -> float:
     return pages * vm["page"] / 1048576
 
 
-def _tegrastats_line(timeout_s: float = 4.0) -> Optional[str]:
-    exe = shutil.which("tegrastats")
-    if exe is None:
-        return None
+def _tegrastats_line(timeout_s: float = 4.0, cmd: Optional[list] = None) -> Optional[str]:
+    """tegrastats' first line, or None if it prints nothing within timeout_s (it can
+    sit silent without root). The child is always killed and reaped (bounded, see
+    the D-state caveat at _run_child)."""
+    if cmd is None:
+        exe = shutil.which("tegrastats")
+        if exe is None:
+            return None
+        cmd = [exe, "--interval", "1000"]
     try:
-        p = subprocess.Popen([exe, "--interval", "500"], stdout=subprocess.PIPE, text=True)
+        p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                             stdin=subprocess.DEVNULL, text=True)
     except OSError:
         return None
+    lines: list = []
+    reader = threading.Thread(target=lambda: lines.append(p.stdout.readline()),
+                              name="tegrastats", daemon=True)
+    reader.start()
     try:
-        t0 = time.monotonic()
-        while time.monotonic() - t0 < timeout_s:
-            line = p.stdout.readline()
-            if line:
-                return line.strip()
-        return None
+        reader.join(timeout_s)  # the hard deadline: readline itself never times out
     finally:
         p.kill()
-        p.wait()
+        try:
+            p.wait(REAP_S)
+        except subprocess.TimeoutExpired:
+            log.warning("tegrastats did not exit after SIGKILL")
+    line = lines[0].strip() if lines and lines[0] else ""
+    return line or None
 
 
 def memory_result(available_mb: float, source: str, servers_up: bool, details: dict) -> Result:
@@ -605,13 +726,12 @@ def memory_result(available_mb: float, source: str, servers_up: bool, details: d
 
 def check_memory(ctx: Context) -> Result:
     servers_up = (ctx.status_of("stt server") == PASS and ctx.status_of("llm server") == PASS)
-    if sys.platform == "darwin":
-        vm = subprocess.run(["vm_stat"], capture_output=True, text=True, timeout=10).stdout
+    if _platform() == "darwin":
+        vm = _cmd_output(["vm_stat"])
         parsed = parse_vm_stat(vm)
         if parsed is None:
             return Result("memory", WARN, "could not parse vm_stat")
-        swap = subprocess.run(["sysctl", "-n", "vm.swapusage"], capture_output=True,
-                              text=True, timeout=10).stdout.strip()
+        swap = _cmd_output(["sysctl", "-n", "vm.swapusage"]).strip()
         r = memory_result(mac_available_mb(parsed), "vm_stat free+inactive+spec+purgeable",
                           servers_up, {"vm_stat": parsed, "swap": swap})
         m = re.search(r"used = ([\d.]+)M", swap)
@@ -620,8 +740,7 @@ def check_memory(ctx: Context) -> Result:
         return r
     if shutil.which("free") is None:
         return Result("memory", WARN, "free(1) not found")
-    free = parse_free(subprocess.run(["free", "-m"], capture_output=True, text=True,
-                                     timeout=10).stdout)
+    free = parse_free(_cmd_output(["free", "-m"]))
     if free is None:
         return Result("memory", WARN, "could not parse free -m")
     details = {"free": free}
@@ -732,10 +851,47 @@ def run_turn(controller, segmenter, vad, tl, player, stt, llm, wav: str, sr16: i
     reply = [c for c in clips if c["kind"] == "reply"]
     turn["filler_s"] = round(filler["start"] - speech_end, 3) if filler else None
     got_sentence = turn.get("llm_first_sentence_s") is not None
+    turn["llm_error"] = len(llm.calls) > n_llm and not got_sentence
     turn["first_sentence_s"] = (round(reply[0]["start"] - speech_end, 3)
                                 if reply and got_sentence else None)
     turn["reply"] = " ".join(c["text"] for c in reply)
     return turn
+
+
+def run_turns(specs: list, budget_s: float, max_llm_errors: int = MAX_LLM_ERRORS,
+              clock: Callable[[], float] = time.monotonic) -> list[Result]:
+    """specs: (name, lang, fn) with fn() -> a run_turn dict. Each turn runs on a
+    budgeted thread inside one shared budget; a stalled turn is abandoned and every
+    later one FAILs as not run, and so do the rest after max_llm_errors LLM errors
+    in a row."""
+    deadline = clock() + budget_s
+    results: list[Result] = []
+    stop_reason = None
+    llm_errors = 0
+    for name, lang, fn in specs:
+        if stop_reason is None and clock() >= deadline:
+            stop_reason = f"the e2e budget of {budget_s:g} s is used up"
+        if stop_reason is not None:
+            results.append(Result(name, FAIL, f"not run: {stop_reason}", server_fix()))
+            continue
+        done, turn, exc = call_with_budget(fn, deadline - clock())
+        if not done:
+            stop_reason = f"the e2e budget of {budget_s:g} s is used up"
+            results.append(Result(name, FAIL, f"no answer within the e2e budget of "
+                                  f"{budget_s:g} s (a stalled server?); abandoned",
+                                  server_fix()))
+            continue
+        if exc is not None:
+            results.append(Result(name, FAIL, f"turn crashed: {type(exc).__name__}: {exc}",
+                                  FIX_E2E))
+            continue
+        r = turn_result(lang, turn)
+        r.name = name
+        results.append(r)
+        llm_errors = llm_errors + 1 if turn.get("llm_error") else 0
+        if llm_errors >= max_llm_errors:
+            stop_reason = f"{llm_errors} LLM errors in a row (llama-server stalled?)"
+    return results
 
 
 def check_e2e(ctx: Context) -> list[Result]:
@@ -770,26 +926,33 @@ def check_e2e(ctx: Context) -> list[Result]:
                          max_clip_s=FILLER_BUDGET_S if engine == "pocket" else None)
     fillers.prepare()
     tts.kind = "reply"
-    unwarmed = warm_llm(llm)
-    results = []
-    for key, name in zip(E2E_QUESTIONS, names):
-        lang, _text, wav = wavs[key]
-        controller = Controller(stt, llm, tts, player, rd._NullLights(), face, cfg.conversation,
-                                clock=tl.now, fillers=fillers,
-                                first_sentence_timeout_s=cfg.servers.timeout_s)
-        for u in unwarmed:
-            controller.mark_unwarmed(u)
-        try:
-            turn = run_turn(controller, segmenter, vad, tl, player, stt, llm, wav,
-                            cfg.audio.sample_rate)
-        finally:
-            controller.close()
-        r = turn_result(lang, turn)
-        r.name = name
-        results.append(r)
-        print(f"       heard: {turn.get('heard')!r}\n       reply: {turn.get('reply')!r}",
-              flush=True)
-    return results
+    t0 = time.monotonic()  # the budget covers the warmups and both turns
+    done, unwarmed, _exc = call_with_budget(lambda: warm_llm(llm), E2E_BUDGET_S)
+    if not done or len(unwarmed or ()) >= MAX_LLM_ERRORS:
+        why = ("the llama-server warmup did not finish within the e2e budget" if not done
+               else f"{len(unwarmed)} LLM warmup errors in a row (llama-server stalled?)")
+        return [Result(n, FAIL, f"not run: {why}", server_fix()) for n in names]
+
+    def turn_fn(wav):
+        def fn():
+            controller = Controller(stt, llm, tts, player, rd._NullLights(), face,
+                                    cfg.conversation, clock=tl.now, fillers=fillers,
+                                    first_sentence_timeout_s=cfg.servers.timeout_s)
+            for u in unwarmed:
+                controller.mark_unwarmed(u)
+            try:
+                turn = run_turn(controller, segmenter, vad, tl, player, stt, llm, wav,
+                                cfg.audio.sample_rate)
+            finally:
+                controller.close()
+            print(f"       heard: {turn.get('heard')!r}\n       reply: {turn.get('reply')!r}",
+                  flush=True)
+            return turn
+        return fn
+
+    specs = [(name, wavs[key][0], turn_fn(wavs[key][2]))
+             for key, name in zip(E2E_QUESTIONS, names)]
+    return run_turns(specs, E2E_BUDGET_S - (time.monotonic() - t0))
 
 
 # --------------------------------------------------------------------------
@@ -798,12 +961,18 @@ def check_e2e(ctx: Context) -> list[Result]:
 def hebrew_result(res: dict) -> Result:
     s, a, f = res["singular"], res["answered"], res["failed"]
     det = {k: res[k] for k in ("n", "singular", "answered", "failed", "replies") if k in res}
+    aborted = res.get("aborted")
     if a == 0:
-        return Result("hebrew address", FAIL, f"all {f} requests failed", server_fix(), det)
+        why = f"; stopped: {aborted}" if aborted else ""
+        return Result("hebrew address", FAIL, f"all {f} requests failed{why}",
+                      server_fix(), det)
     st = WARN if s > HEBREW_WARN_SINGULAR else PASS
     reason = f"singular address in {s}/{a} replies (warn > {HEBREW_WARN_SINGULAR})"
     if f:
         reason += f"; {f} request(s) failed"
+        st = max(st, WARN, key=_RANK.get)
+    if aborted:
+        reason += f"; stopped after {a + f}/{res['n']}: {aborted}"
         st = max(st, WARN, key=_RANK.get)
     return Result("hebrew address", st, reason, FIX_HEBREW if st != PASS else "", det)
 
@@ -813,7 +982,8 @@ def check_hebrew(ctx: Context) -> Result:
         return Result("hebrew address", FAIL, "llama-server is not up", server_fix())
     from hebrew_address_check import build_llm, run_check
 
-    res = run_check(build_llm(ctx.cfg, ctx.config_path), HEBREW_N, show=lambda _s: None)
+    res = run_check(build_llm(ctx.cfg, ctx.config_path), HEBREW_N, show=lambda _s: None,
+                    budget_s=HEBREW_BUDGET_S, max_consecutive_errors=MAX_LLM_ERRORS)
     return hebrew_result(res)
 
 
@@ -841,8 +1011,9 @@ def main(argv=None) -> int:
     ap.add_argument("--quick", action="store_true", help="skip the end-to-end and Hebrew checks")
     ap.add_argument("--skip-audio", action="store_true", help="skip the audio device check")
     ap.add_argument("--json", metavar="PATH", help="write a JSON report here")
-    ap.add_argument("--cache", default=os.path.expanduser("~/.cache/mirror-bringup"),
-                    help="where the synthesized question WAVs are cached")
+    ap.add_argument("--cache", default=DEFAULT_CACHE,
+                    help="where the synthesized question WAVs are cached "
+                         "(default: the repo's .cache/bringup, gitignored)")
     ap.add_argument("-v", "--verbose", action="store_true", help="log the pipeline")
     ap.add_argument("--probe-audio", choices=("input", "output"), help=argparse.SUPPRESS)
     args = ap.parse_args(argv)

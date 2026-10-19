@@ -319,7 +319,9 @@ mic, speaker and serial port are free. In order, each check prints PASS, WARN, F
 SKIP, a one-line reason and, if something is wrong, where in this README to look:
 
 1. **config**: the config loads, and every model file it and the server units use exists
-   with a plausible size (a truncated download fails).
+   with a plausible size (a truncated download fails). The server models are read from
+   the installed units and their drop-ins (on the Mac `$STT_MODEL`/`$LLM_MODEL` win), and
+   the line says which file each came from.
 2. **audio input / output**: the `input_device` / `output_device` substring matches a
    device, and the mic and speaker open for about 1 s. It reports the format they
    negotiated. Each runs in a subprocess that is killed after 15 s, so a hung
@@ -331,14 +333,16 @@ SKIP, a one-line reason and, if something is wrong, where in this README to look
 6. **memory**: `free -m` plus one `tegrastats` line (`vm_stat` on the Mac). It FAILs
    under 300 MB available and WARNs under 500 MB: see "Memory on the Orin" below.
 7. **e2e English / Hebrew**: an English and a Hebrew "Mirror, mirror ..." question,
-   synthesized once with the repo's voices and cached in `~/.cache/mirror-bringup`, go
+   synthesized once with the repo's voices and cached in `.cache/bringup` (gitignored), go
    through the real VAD -> STT -> wake -> LLM (streaming) -> TTS path, with a fake
    speaker (`tools/record_demo.py`'s timeline). It prints the transcript and the reply,
    and reports whether the wake phrase matched, the detected language, and the time from
    the end of speech to the filler and to the first reply sentence. PASS when the wake
    matched and the first sentence starts within 6 s, WARN up to 10 s.
+   The whole check gets 120 s (warmups included). It stops after 2 LLM errors in a row.
 8. **hebrew address**: `tools/hebrew_address_check.py` with 10 questions. WARN if more
-   than 2 of the 10 replies address the visitor in the singular.
+   than 2 of the 10 replies address the visitor in the singular. It stops after
+   180 s or after 2 failed requests in a row.
 
 `--quick` skips 7 and 8, `--skip-audio` skips 2, and `--json PATH` also writes the
 full report (every reason, transcript and measurement) as JSON. A summary table comes

@@ -13,6 +13,7 @@ heuristic: read the replies too (it misses past-tense forms such as "ששכחת"
 import argparse
 import os
 import sys
+import time
 
 REPO = os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir)
 sys.path.insert(0, REPO)
@@ -43,27 +44,42 @@ def build_llm(cfg, config_path, url=None) -> LlamaServerLLM:
                           max_chars=cfg.conversation.max_reply_chars, world=world)
 
 
-def run_check(llm, n: int, show=print) -> dict:
+def run_check(llm, n: int, show=print, budget_s=None, max_consecutive_errors=None,
+              clock=time.monotonic) -> dict:
     """Send n Hebrew questions, one fresh conversation each; show() each reply.
-    Returns {"n", "singular", "answered", "failed", "replies": [...]}."""
-    singular = failed = 0
+    Stops early once budget_s has passed (checked between questions, so one request
+    can overrun it by its timeout) or after max_consecutive_errors failed requests in
+    a row. Returns {"n", "singular", "answered", "failed", "aborted" (None or why),
+    "replies": [...]}."""
+    singular = failed = in_a_row = 0
     replies = []
+    aborted = None
+    deadline = None if budget_s is None else clock() + budget_s
     for i in range(n):
+        if deadline is not None and clock() >= deadline:
+            aborted = f"the budget of {budget_s:g} s is used up"
+            break
+        if max_consecutive_errors and in_a_row >= max_consecutive_errors:
+            aborted = f"{in_a_row} errors in a row (llama-server stalled?)"
+            break
         question = QUESTIONS[i % len(QUESTIONS)]
         try:
             reply = llm.reply([], question, "he")
         except LLMError as e:
             failed += 1
+            in_a_row += 1
             replies.append({"question": question, "error": str(e)})
             show(f"[{i + 1}] {question}\n    ERROR: {e}\n")
             continue
+        in_a_row = 0
         markers = singular_address(reply)
         singular += bool(markers)
         replies.append({"question": question, "reply": reply, "markers": markers})
         flag = f"SINGULAR {' '.join(markers)}" if markers else "plural"
         show(f"[{i + 1}] {question}\n    {reply}\n    -> {flag}\n")
-    return {"n": n, "singular": singular, "answered": n - failed, "failed": failed,
-            "replies": replies}
+    answered = sum("reply" in r for r in replies)
+    return {"n": n, "singular": singular, "answered": answered, "failed": failed,
+            "aborted": aborted, "replies": replies}
 
 
 def main(argv=None) -> int:
@@ -76,10 +92,12 @@ def main(argv=None) -> int:
     cfg = load_config(args.config)
     res = run_check(build_llm(cfg, args.config, args.url), args.n)
     singular, answered, failed = res["singular"], res["answered"], res["failed"]
+    if res["aborted"]:
+        print(f"stopped early: {res['aborted']}")
     rate = f"{100.0 * singular / answered:.0f}%" if answered else "n/a"
     print(f"singular address in {singular}/{answered} replies ({rate})"
           + (f"; {failed} request(s) failed" if failed else ""))
-    return 1 if failed == args.n else 0
+    return 1 if answered == 0 else 0
 
 
 if __name__ == "__main__":
