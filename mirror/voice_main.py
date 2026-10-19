@@ -37,8 +37,10 @@ TICK_S = 0.1
 # --wav: after the file, feed enough silence for the segmenter to end the utterance
 WAV_TAIL_MARGIN_S = 0.3
 SEGMENTS_MAX = 3  # queued utterances; under constant noise the oldest are dropped
-MIC_MAX_FAILURES = 3  # consecutive mic stalls/open failures before giving up
-MIC_RETRY_S = 1.0  # pause before reopening a failed mic
+# Waits between consecutive failed mic attempts (~31 s in all); the attempt after
+# the last wait is the final one. CoreAudio can stop a whole process for several
+# seconds under heavy swap, so ride that out before letting systemd restart us.
+MIC_RETRY_DELAYS_S = (1, 2, 4, 8, 16)
 _ANSWERING = (State.THINKING, State.SPEAKING)
 
 
@@ -194,11 +196,13 @@ def _put_dropping_oldest(q: "queue.Queue", item) -> None:
 
 def audio_worker(open_source, segmenter: Segmenter, vad: SileroVad, gate: AnswerGate,
                  segments: "queue.Queue", stop: threading.Event, failed: threading.Event,
-                 max_failures: int = MIC_MAX_FAILURES, retry_s: float = MIC_RETRY_S) -> None:
+                 delays=MIC_RETRY_DELAYS_S) -> None:
     """Run audio_loop on open_source(), reopening it when the mic stalls or fails
-    to open. After max_failures in a row (no audio in between) set `failed`, so
-    run() exits non-zero and systemd restarts the service."""
+    to open, waiting delays[i] before retry i+1 (interruptible by `stop`). After
+    len(delays)+1 failures in a row (no audio in between) set `failed`, so run()
+    exits non-zero and systemd restarts the service."""
     failures = 0
+    max_failures = len(delays) + 1
     while not stop.is_set():
         src, opened = None, False
         try:
@@ -222,8 +226,10 @@ def audio_worker(open_source, segmenter: Segmenter, vad: SileroVad, gate: Answer
             log.error("mic failed %d times in a row (%s); giving up", failures, err)
             failed.set()
             return
-        log.warning("mic failed (%d/%d): %s; reopening", failures, max_failures, err)
-        stop.wait(retry_s)
+        delay = delays[failures - 1]
+        log.warning("mic failed (attempt %d/%d): %s; waiting %g s before reopening",
+                    failures, max_failures, err, delay)
+        stop.wait(delay)
 
 
 def _drain(q: "queue.Queue") -> int:

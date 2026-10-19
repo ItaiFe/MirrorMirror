@@ -257,7 +257,7 @@ def _run_worker(open_source, max_failures=3):
     segments, stop, failed = queue.Queue(maxsize=100), threading.Event(), threading.Event()
     seg, vad = _Segmenter(), _Resettable()
     audio_worker(open_source, seg, vad, _Gate(), segments, stop, failed,
-                 max_failures=max_failures, retry_s=0.0)
+                 delays=(0.0,) * (max_failures - 1))
     return failed, segments, seg, vad
 
 
@@ -315,7 +315,7 @@ def test_audio_worker_fails_at_once_on_a_pipeline_bug(caplog):
 
     failed = threading.Event()
     audio_worker(lambda: _StallingMic(5, events), BadSegmenter(), _Resettable(), _Gate(),
-                 queue.Queue(), threading.Event(), failed, retry_s=0.0)
+                 queue.Queue(), threading.Event(), failed, delays=(0.0,))
     assert failed.is_set() and events == ["open", "close"]
     assert "audio thread failed" in caplog.text
 
@@ -563,3 +563,92 @@ def test_load_tts_warms_up_exactly_once(monkeypatch, engine):
     monkeypatch.setattr(vm, "build_tts", fake_build)
     assert vm.load_tts(TtsConfig(engine=engine))[2] == engine
     assert router.warmups == 1
+
+
+class _RecordingStop:
+    """Stands in for the stop Event: records wait() timeouts, returns at once."""
+
+    def __init__(self, set_after_waits=None):
+        self.waits, self._set_after = [], set_after_waits
+
+    def is_set(self):
+        return self._set_after is not None and len(self.waits) >= self._set_after
+
+    def wait(self, timeout=None):
+        self.waits.append(timeout)
+        return self.is_set()
+
+
+def _worker_with(open_source, stop, **kw):
+    import queue
+    import threading
+
+    from mirror.voice_main import audio_worker
+
+    failed = threading.Event()
+    audio_worker(open_source, _Segmenter(), _Resettable(), _Gate(), queue.Queue(maxsize=100),
+                 stop, failed, **kw)
+    return failed
+
+
+def test_mic_retry_delays_back_off_exponentially():
+    from mirror.voice_main import MIC_RETRY_DELAYS_S
+
+    assert tuple(MIC_RETRY_DELAYS_S) == (1, 2, 4, 8, 16)
+
+
+def test_audio_worker_backs_off_then_recovers(caplog):
+    events, opened = [], []
+
+    def open_mic():
+        opened.append(1)
+        if len(opened) <= 3:
+            raise RuntimeError("coreaudio down")
+        return _StallingMic(2, events)
+
+    stop = _RecordingStop()
+    with caplog.at_level("WARNING", logger="mirror.voice"):
+        # the 4th mic yields audio, then stalls; stop after the wait that follows it
+        stop._set_after = 4
+        failed = _worker_with(open_mic, stop, delays=(1, 2, 4, 8, 16))
+    assert not failed.is_set()
+    assert stop.waits[:3] == [1, 2, 4]
+    assert stop.waits[3] == 1  # audio arrived: the counter restarted
+    assert "1/6" in caplog.text or "attempt 1" in caplog.text
+    assert "waiting 4" in caplog.text
+
+
+def test_audio_worker_gives_up_after_six_consecutive_failures(caplog):
+    calls = []
+
+    def open_mic():
+        calls.append(1)
+        raise RuntimeError("down")
+
+    stop = _RecordingStop()
+    failed = _worker_with(open_mic, stop, delays=(1, 2, 4, 8, 16))
+    assert failed.is_set() and len(calls) == 6
+    assert stop.waits == [1, 2, 4, 8, 16]
+
+
+def test_audio_worker_stop_during_backoff_returns_promptly():
+    import queue
+    import threading
+    import time
+
+    from mirror.voice_main import audio_worker
+
+    def open_mic():
+        raise RuntimeError("down")
+
+    stop, failed = threading.Event(), threading.Event()
+    t = threading.Thread(target=audio_worker, args=(
+        open_mic, _Segmenter(), _Resettable(), _Gate(), queue.Queue(), stop, failed),
+        kwargs={"delays": (30, 30)})
+    t.start()
+    time.sleep(0.2)
+    t0 = time.monotonic()
+    stop.set()
+    t.join(5)
+    assert not t.is_alive() and time.monotonic() - t0 < 2
+    assert not failed.is_set()
