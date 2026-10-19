@@ -8,6 +8,9 @@ After=graphical-session.target
 StartLimitIntervalSec=0
 
 [Service]
+Type=notify
+NotifyAccess=main
+WatchdogSec=60
 Environment=DISPLAY=:0
 Environment=XAUTHORITY=%t/gdm/Xauthority
 WorkingDirectory=@REPO@

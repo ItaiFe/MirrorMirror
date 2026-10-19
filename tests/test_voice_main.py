@@ -652,3 +652,27 @@ def test_audio_worker_stop_during_backoff_returns_promptly():
     t.join(5)
     assert not t.is_alive() and time.monotonic() - t0 < 2
     assert not failed.is_set()
+
+
+def test_main_loop_watchdog_hooks(monkeypatch):
+    """The loop in run() pings every tick and reports ready once, after "ready"."""
+    import inspect
+
+    import mirror.voice_main as vm
+
+    src = inspect.getsource(vm.run)
+    assert src.index('log.info("ready")') < src.index("watchdog.ready()") < src.index("watchdog.ping()")
+    assert vm.WATCHDOG_SEC >= 2 * vm.WORST_ANSWER_S
+
+
+def test_systemd_units_use_the_watchdog():
+    import pathlib
+
+    for name in ("mirror-voice", "mirror-face"):
+        text = (pathlib.Path("deploy/systemd") / f"{name}.service").read_text()
+        for key in ("Type=notify", "NotifyAccess=main", "Restart=always"):
+            assert key in text, (name, key)
+    voice = pathlib.Path("deploy/systemd/mirror-voice.service").read_text()
+    import mirror.voice_main as vm
+    assert f"WatchdogSec={vm.WATCHDOG_SEC}" in voice
+    assert "WatchdogSec=" in pathlib.Path("deploy/systemd/mirror-face.service").read_text()

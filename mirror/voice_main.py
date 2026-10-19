@@ -19,6 +19,7 @@ import wave
 
 import numpy as np
 
+from mirror import watchdog
 from mirror.audio import CHUNK, Mic, MicStalled, Player, find_device
 from mirror.bus import FaceBus
 from mirror.config import Config, TtsConfig, load_config, resolve_repo_path
@@ -41,6 +42,15 @@ SEGMENTS_MAX = 3  # queued utterances; under constant noise the oldest are dropp
 # the last wait is the final one. CoreAudio can stop a whole process for several
 # seconds under heavy swap, so ride that out before letting systemd restart us.
 MIC_RETRY_DELAYS_S = (1, 2, 4, 8, 16)
+# systemd watchdog. The main loop pings once per tick (100 ms) EXCEPT while it is
+# inside controller.on_segment, which blocks for the whole answer: STT (up to
+# servers.timeout_s = 20 s) + the first reply sentence (first_sentence_timeout_s = 20 s,
+# filler included) + speaking <= 3 sentences / 300 chars (~25 s) + a late sentence.
+# That is about 60 s at the worst, so mirror-voice.service sets WatchdogSec to twice
+# that: a long but healthy answer must never get the service restarted, while a real
+# hang is still caught within two minutes. Keep the unit file in step with this.
+WORST_ANSWER_S = 60
+WATCHDOG_SEC = 120
 _ANSWERING = (State.THINKING, State.SPEAKING)
 
 
@@ -411,7 +421,9 @@ def run(cfg: Config, wav_path=None, config_path=None) -> int:
             args=(open_source, segmenter, vad, gate, segments, stop, failed))
         audio_thread.start()
         log.info("ready")
+        watchdog.ready()
         while not stop.is_set() and not failed.is_set():
+            watchdog.ping()  # rate-limited; see WATCHDOG_SEC for the on_segment blind spot
             try:
                 seg = segments.get(timeout=TICK_S)
             except queue.Empty:

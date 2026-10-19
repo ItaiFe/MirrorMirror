@@ -15,6 +15,7 @@ import time
 import numpy as np
 import pygame
 
+from mirror import watchdog
 from mirror.bus import FaceBus
 from mirror.config import Config, load_config, resolve_repo_path
 from mirror.face.draw import draw_face
@@ -92,6 +93,7 @@ def run(config_path: str) -> None:
         t0 = last = time.monotonic()
         next_blink = t0 + random.uniform(*BLINK_GAP_S)
         blink_start = -1.0
+        reported_ready = False
         while not stop["flag"]:
             for ev in pygame.event.get():
                 if ev.type == pygame.QUIT or (ev.type == pygame.KEYDOWN
@@ -125,6 +127,9 @@ def run(config_path: str) -> None:
             else:
                 pygame.transform.scale(face, screen.get_size(), screen)
             pygame.display.flip()
+            if not reported_ready:
+                reported_ready = watchdog.ready() or True  # after the first frame
+            watchdog.ping()  # rate-limited
             clock.tick(FPS)
     finally:
         bus.close()

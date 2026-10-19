@@ -8,11 +8,18 @@ After=mirror-stt.service mirror-llm.service
 StartLimitIntervalSec=0
 
 [Service]
+Type=notify
+NotifyAccess=main
+# Must exceed the longest single answer (voice_main.WORST_ANSWER_S = 60 s), during which
+# the main loop cannot ping; see voice_main.WATCHDOG_SEC.
+WatchdogSec=120
 WorkingDirectory=@REPO@
 # Wait (up to 3 min) until both servers answer /health, so the first visitor isn't
 # talking to a model that is still loading.
 ExecStartPre=/bin/sh -c 'for i in $$(seq 180); do curl -sf -o /dev/null http://127.0.0.1:8081/health && curl -sf -o /dev/null http://127.0.0.1:8080/health && exit 0; sleep 1; done; exit 1'
-TimeoutStartSec=200
+# With Type=notify this covers ExecStartPre (up to 180 s waiting for the servers) AND
+# loading the VAD, TTS and fillers, up to READY=1.
+TimeoutStartSec=420
 ExecStart=@REPO@/.venv/bin/mirror-voice --config @REPO@/config/orin.toml
 Restart=always
 RestartSec=2
