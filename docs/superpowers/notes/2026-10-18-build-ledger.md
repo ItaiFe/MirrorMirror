@@ -128,3 +128,12 @@ Task 19: complete (commits c7bf9c1..eca395e, review clean after 1 fix round; e2e
 All tasks complete (1–19). Final whole-branch review next.
 Final review: ready with fixes — I1 audio formats on Orin, I2 mic/writer timeouts, I3 serial write_timeout, I4 dependency pins, flaky phonikud test; one fix wave dispatched (+ cheap M-items).
 Final review fix wave: all addressed (89ef275), 212 tests; final review clean.
+
+## 2026-10-19
+Task 26 (varied answers, dfb4322): review → Needs fixes (Important: angle note could be spoken). Fix round 1 (a136827): angle-echo filter in trim_reply + stream; explicit stage-direction word list; Hebrew wording. Variety (seed 1, 25 replies/lang): en distinct-1 0.340 → 0.409, he stock words 40% → 8%.
+Follow-up (f10fce0): 40% of replies ran past max_chars and were spoken cut off → prompt asks for < 40 words; a later sentence that doesn't fit, or an unfinished one (max_tokens), is dropped instead of cut. Re-measure: 0/50 cut, avg 194 chars.
+895f9de: crude-sentence filter (en + he; whole words, so Sussex/cocktail/כוס stay). Seen: "החרמנים" in a Hebrew reply.
+Voice: user asked for Jafar's voice → declined (real actor's voice); offered an original villain-style voice. 35caa1f + 6b24dc5: tts.voice_speed / voice_room effect (default off). User designed a voice in ElevenLabs → models/voices/mirror.npy (Pocket clone, not in git); 4bcd2fd: Pocket pauses capped at 0.4 s; acf3d01: config/mac.toml uses it; Orin keeps Piper until measured. Mac (M2, 2 threads): RTF 0.22 en / 0.25–0.32 he, ~0.9 GB peak RSS. Under the live demo the 8 GB Mac swaps (Hebrew synth 8–13 s, same with Piper earlier).
+2b292be: world file touches the theme "now and then" ("carry" 12 → 1 in 25 en replies). A "never open with You seek" rule made stock words worse (52%) → reverted.
+d8be975: hebrew_address_check sends angles. Singular address ~5/20 both with and without angles (after reading out את false positives), mostly on feminine questions. Known 4B limit; above the bring-up 20% PASS line.
+Open: merge choice (user); Orin bring-up + memory with Pocket (hardware Oct 24+); user to listen to the Hebrew in the cloned voice.
