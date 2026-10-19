@@ -2,16 +2,18 @@
 """How often does the running llama-server address a Hebrew visitor in the singular?
 
     python tools/hebrew_address_check.py [--n 20] [--url http://127.0.0.1:8080]
-                                         [--config config/orin.toml]
+                                         [--config config/orin.toml] [--no-angle] [--seed N]
 
 Sends N Hebrew questions (cycling through a fixed list: neutral, masculine and
 feminine singular, plural) through LlamaServerLLM with the real oracle prompt and
-world, one fresh conversation each, and prints every reply with the singular-address
+world, one fresh conversation each, each with an answer angle as in the mirror
+(--no-angle: bare questions), and prints every reply with the singular-address
 markers mirror.persona.singular_address finds, then the rate. The check is a
 heuristic: read the replies too (it misses past-tense forms such as "ששכחת").
 """
 import argparse
 import os
+import random
 import sys
 import time
 
@@ -20,7 +22,7 @@ sys.path.insert(0, REPO)
 
 from mirror.config import load_config, resolve_repo_path  # noqa: E402
 from mirror.llm import LLMError, LlamaServerLLM  # noqa: E402
-from mirror.persona import load_world, singular_address  # noqa: E402
+from mirror.persona import load_world, pick_angle, singular_address  # noqa: E402
 
 QUESTIONS = [
     "מה מחכה לי בעתיד?",
@@ -46,15 +48,17 @@ def build_llm(cfg, config_path, url=None) -> LlamaServerLLM:
 
 
 def run_check(llm, n: int, show=print, budget_s=None, max_consecutive_errors=None,
-              clock=time.monotonic) -> dict:
+              clock=time.monotonic, rng=None) -> dict:
     """Send n Hebrew questions, one fresh conversation each; show() each reply.
     Stops early once budget_s has passed (checked between questions, so one request
     can overrun it by its timeout) or after max_consecutive_errors failed requests in
-    a row. Returns {"n", "singular", "answered", "failed", "aborted" (None or why),
+    a row. With rng, each question gets an answer angle picked the way the
+    Controller picks it (unlike the recent ones). Returns {"n", "singular", "answered", "failed", "aborted" (None or why),
     "replies": [...]}."""
     singular = failed = in_a_row = 0
     replies = []
     aborted = None
+    recent = []
     deadline = None if budget_s is None else clock() + budget_s
     for i in range(n):
         if deadline is not None and clock() >= deadline:
@@ -64,8 +68,12 @@ def run_check(llm, n: int, show=print, budget_s=None, max_consecutive_errors=Non
             aborted = f"{in_a_row} errors in a row (llama-server stalled?)"
             break
         question = QUESTIONS[i % len(QUESTIONS)]
+        kwargs = {}
+        if rng is not None:
+            kwargs["angle"] = pick_angle(rng, recent)
+            recent.append(kwargs["angle"])
         try:
-            reply = llm.reply([], question, "he")
+            reply = llm.reply([], question, "he", **kwargs)
         except LLMError as e:
             failed += 1
             in_a_row += 1
@@ -88,10 +96,14 @@ def main(argv=None) -> int:
     ap.add_argument("--n", type=int, default=len(QUESTIONS), help="questions to send")
     ap.add_argument("--url", default=None, help="llama-server (default: the config's)")
     ap.add_argument("--config", default=os.path.join(REPO, "config", "mac.toml"))
+    ap.add_argument("--no-angle", action="store_true",
+                    help="bare questions, without the Controller's answer angles")
+    ap.add_argument("--seed", type=int, default=None, help="angle picks (default: random)")
     args = ap.parse_args(argv)
 
     cfg = load_config(args.config)
-    res = run_check(build_llm(cfg, args.config, args.url), args.n)
+    rng = None if args.no_angle else random.Random(args.seed)
+    res = run_check(build_llm(cfg, args.config, args.url), args.n, rng=rng)
     singular, answered, failed = res["singular"], res["answered"], res["failed"]
     if res["aborted"]:
         print(f"stopped early: {res['aborted']}")

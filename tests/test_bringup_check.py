@@ -342,6 +342,22 @@ def test_hebrew_address_run_check_counts_singular_replies():
     assert res["singular"] == 1
 
 
+def test_hebrew_address_run_check_sends_angles_like_the_controller():
+    import random
+
+    import hebrew_address_check as hac
+
+    angles = []
+
+    class LLM:
+        def reply(self, history, q, lang, angle=None):
+            angles.append(angle)
+            return "אתם תמצאו את הדרך."
+
+    hac.run_check(LLM(), 4, show=lambda s: None, rng=random.Random(1))
+    assert all(a is not None for a in angles) and len(set(angles)) > 1
+
+
 def test_e2e_and_hebrew_fail_fast_without_servers():
     ctx = bc.Context(cfg=Config())
     ctx.results = [bc.Result("stt server", bc.FAIL, ""), bc.Result("llm server", bc.FAIL, "")]
