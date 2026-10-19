@@ -447,6 +447,17 @@ def test_build_tts_pocket(monkeypatch):
     assert router._en == ("view", "en") and router._he == ("view", "he")
 
 
+@pytest.mark.parametrize("engine", ["piper", "pocket"])
+def test_build_tts_passes_the_voice_effect(monkeypatch, engine):
+    from mirror.voice_main import build_tts
+
+    _stub_piper_stack(monkeypatch)
+    monkeypatch.setattr(mirror.tts, "PocketTTS", FakePocket)
+    router, _, got = build_tts(TtsConfig(engine=engine, voice_speed=0.86, voice_room=0.5))
+    assert got == engine
+    assert router._voice_speed == 0.86 and router._voice_room == 0.5
+
+
 def test_build_tts_pocket_passes_its_settings(monkeypatch):
     from mirror.voice_main import build_tts
 

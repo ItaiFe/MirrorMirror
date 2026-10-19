@@ -464,15 +464,54 @@ class _PocketLang:
         return self._tts.synth_visemes(text, self._lang)
 
 
+# the small room: (delay ms, gain) echoes of the voice, gains scaled by `room`
+_ROOM_ECHOES = ((37, 0.28), (53, 0.22), (71, 0.16), (97, 0.11))
+_EFFECT_PEAK = 0.9
+
+
+def voice_effect(audio: np.ndarray, sr: int, track: VisemeTrack | None,
+                 speed: float = 1.0, room: float = 0.0
+                 ) -> tuple[np.ndarray, VisemeTrack | None]:
+    """The "villain" voice: resample so playback runs at `speed` (deeper and slower
+    below 1), add a few decaying room echoes, peak-normalize. The viseme track is
+    stretched by 1/speed to stay in sync. Off (speed 1, room 0) returns the inputs."""
+    if speed == 1.0 and room == 0.0:
+        return audio, track
+    out = audio
+    if speed != 1.0:
+        n = int(len(audio) / speed)
+        out = np.interp(np.linspace(0, len(audio) - 1, n), np.arange(len(audio)),
+                        audio).astype(np.float32) if len(audio) else audio[:0]
+        if track is not None:
+            track = VisemeTrack(track.times / speed, list(track.shapes), track.end / speed)
+    if room > 0.0:
+        dry = out
+        out = dry.copy()
+        for ms, gain in _ROOM_ECHOES:
+            d = int(sr * ms / 1000)
+            if 0 < d < len(dry):
+                out[d:] += room * gain * dry[:-d]
+    peak = float(np.abs(out).max()) if len(out) else 0.0
+    if peak > 1e-6:
+        out = (out * (_EFFECT_PEAK / peak)).astype(np.float32, copy=False)
+    return out, track
+
+
 class TTSRouter:
-    def __init__(self, en: Synth, he: Synth):
+    def __init__(self, en: Synth, he: Synth, voice_speed: float = 1.0,
+                 voice_room: float = 0.0):
         self._en = en
         self._he = he
+        self._voice_speed = voice_speed  # voice_effect, on every line in both languages
+        self._voice_room = voice_room
+
+    def _effect(self, audio, rate, track):
+        return voice_effect(audio, rate, track, self._voice_speed, self._voice_room)
 
     def synth(self, text: str, lang: str) -> tuple[np.ndarray, int]:
         engine = self._he if lang == "he" else self._en
-        audio, rate = engine.synth(text)
-        return _normalize(audio, rate)
+        audio, rate = _normalize(*engine.synth(text))
+        return self._effect(audio, rate, None)[0], rate
 
     def synth_visemes(self, text: str, lang: str) -> tuple[np.ndarray, int, VisemeTrack | None]:
         """Audio plus a mouth-shape track; the track is None for engines that can't
@@ -480,9 +519,12 @@ class TTSRouter:
         engine = self._he if lang == "he" else self._en
         if not hasattr(engine, "synth_visemes"):
             audio, rate = engine.synth(text)
-            return (*_normalize(audio, rate), None)
-        audio, rate, track = engine.synth_visemes(text)
-        return (*_normalize(audio, rate), track)
+            track = None
+        else:
+            audio, rate, track = engine.synth_visemes(text)
+        audio, rate = _normalize(audio, rate)
+        audio, track = self._effect(audio, rate, track)
+        return audio, rate, track
 
     def warmup(self) -> None:
         self.synth("hello", "en")

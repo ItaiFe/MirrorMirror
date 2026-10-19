@@ -328,6 +328,7 @@ def build_tts(tts_cfg: TtsConfig):
 
     if tts_cfg.engine not in ("piper", "pocket"):
         raise ValueError(f"unknown tts.engine {tts_cfg.engine!r} (piper | pocket)")
+    _effect = {"voice_speed": tts_cfg.voice_speed, "voice_room": tts_cfg.voice_room}
     if tts_cfg.engine == "pocket":
         try:
             g2p = tts.RenikudG2P(tts_cfg.renikud_model)
@@ -335,7 +336,7 @@ def build_tts(tts_cfg: TtsConfig):
             pocket = tts.PocketTTS(tts_cfg.pocket_model, voice=tts_cfg.pocket_voice,
                                    voice_file=tts_cfg.pocket_voice_file,
                                    threads=tts_cfg.pocket_threads, g2p=g2p)
-            router = tts.TTSRouter(pocket.for_lang("en"), pocket.for_lang("he"))
+            router = tts.TTSRouter(pocket.for_lang("en"), pocket.for_lang("he"), **_effect)
             # one short line per language: a model that loads but can't speak falls back too
             router.warmup()
             log.info("TTS: pocket (voice %s, %d threads)",
@@ -346,7 +347,8 @@ def build_tts(tts_cfg: TtsConfig):
                         tts_cfg.pocket_model, type(e).__name__, e)
     log.info("loading TTS voices (Hebrew: %s, G2P %s)", tts_cfg.he_engine, tts_cfg.he_g2p)
     en_tts = tts.PiperTTS(tts_cfg.piper_voice_en)
-    return tts.TTSRouter(en_tts, build_hebrew_tts(tts_cfg)), en_tts.sample_rate, "piper"
+    router = tts.TTSRouter(en_tts, build_hebrew_tts(tts_cfg), **_effect)
+    return router, en_tts.sample_rate, "piper"
 
 
 def load_tts(tts_cfg: TtsConfig):

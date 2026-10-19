@@ -56,7 +56,8 @@ def make_tts(cfg, langs):
     from mirror.voice_main import build_hebrew_tts
 
     he = build_hebrew_tts(cfg.tts) if "he" in langs else None  # only load what is used
-    return TTSRouter(PiperTTS(cfg.tts.piper_voice_en), he)
+    return TTSRouter(PiperTTS(cfg.tts.piper_voice_en), he,
+                     voice_speed=cfg.tts.voice_speed, voice_room=cfg.tts.voice_room)
 
 
 def write_wav(path, samples, sr):

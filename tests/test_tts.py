@@ -669,3 +669,127 @@ def test_renikud_g2p_caps_its_onnxruntime_threads(monkeypatch):
     (_, kwargs), = record["inits"]
     opts = kwargs["session_options"]
     assert opts.intra_op_num_threads == 2
+
+
+# --- the "villain" voice effect ---
+
+def _sine(freq, seconds, sr=22050):
+    t = np.arange(int(sr * seconds)) / sr
+    return (0.5 * np.sin(2 * np.pi * freq * t)).astype(np.float32)
+
+
+def _peak_hz(audio, sr):
+    spectrum = np.abs(np.fft.rfft(audio))
+    return np.fft.rfftfreq(len(audio), 1 / sr)[int(np.argmax(spectrum))]
+
+
+def test_voice_effect_off_returns_the_input_arrays():
+    from mirror.tts import voice_effect
+
+    a = _sine(220, 0.5)
+    track = VisemeTrack(np.array([0.0, 0.2]), ["A", "D"], end=0.4)
+    out, t = voice_effect(a, 22050, track, speed=1.0, room=0.0)
+    assert out is a and t is track
+
+
+def test_voice_effect_slows_by_the_speed_factor():
+    from mirror.tts import voice_effect
+
+    a = _sine(220, 1.0)
+    out, _ = voice_effect(a, 22050, None, speed=0.86, room=0.0)
+    assert len(out) == int(len(a) / 0.86)
+    assert out.dtype == np.float32
+
+
+def test_voice_effect_lowers_the_pitch_by_the_speed_factor():
+    from mirror.tts import voice_effect
+
+    sr = 22050
+    a = _sine(440, 1.0, sr)
+    out, _ = voice_effect(a, sr, None, speed=0.86, room=1.0)
+    assert _peak_hz(out, sr) == pytest.approx(440 * 0.86, abs=3)
+
+
+def test_voice_effect_peak_normalizes():
+    from mirror.tts import voice_effect
+
+    out, _ = voice_effect(_sine(220, 0.5), 22050, None, speed=0.86, room=1.0)
+    assert np.abs(out).max() == pytest.approx(0.9, abs=1e-4)
+
+
+def test_voice_effect_room_only_keeps_the_length_and_adds_echo():
+    from mirror.tts import voice_effect
+
+    a = np.zeros(22050, np.float32)
+    a[0] = 1.0  # an impulse: the echoes show up at their delays
+    out, _ = voice_effect(a, 22050, None, speed=1.0, room=0.5)
+    assert len(out) == len(a)
+    d = int(22050 * 37 / 1000)
+    assert out[d] / out[0] == pytest.approx(0.28 * 0.5, rel=1e-3)
+
+
+def test_voice_effect_scales_the_viseme_track():
+    from mirror.tts import voice_effect
+
+    track = VisemeTrack(np.array([0.0, 0.43, 0.86]), ["A", "D", "X"], end=1.72)
+    _, t = voice_effect(_sine(220, 2.0), 22050, track, speed=0.86, room=1.0)
+    assert np.allclose(t.times, [0.0, 0.5, 1.0])
+    assert t.end == pytest.approx(2.0) and t.shapes == ["A", "D", "X"]
+    assert np.allclose(track.times, [0.0, 0.43, 0.86])  # the input is untouched
+
+
+def test_voice_effect_keeps_an_open_track_end_infinite():
+    from mirror.tts import voice_effect
+
+    track = VisemeTrack(np.array([0.0, 0.43]), ["A", "D"])
+    _, t = voice_effect(_sine(220, 1.0), 22050, track, speed=0.86, room=0.0)
+    assert t.end == float("inf") and np.allclose(t.times, [0.0, 0.5])
+
+
+def test_voice_effect_none_track_stays_none():
+    from mirror.tts import voice_effect
+
+    _, t = voice_effect(_sine(220, 0.5), 22050, None, speed=0.86, room=1.0)
+    assert t is None
+
+
+@pytest.mark.parametrize("audio", [np.zeros(0, np.float32), np.zeros(1000, np.float32)])
+def test_voice_effect_empty_or_silent_audio(audio):
+    from mirror.tts import voice_effect
+
+    out, _ = voice_effect(audio, 22050, None, speed=0.86, room=1.0)
+    assert np.all(out == 0) and np.all(np.isfinite(out))
+
+
+def test_voice_effect_is_cheap():
+    import time
+
+    from mirror.tts import voice_effect
+
+    a = (np.random.default_rng(0).standard_normal(22050 * 10) * 0.1).astype(np.float32)
+    voice_effect(a, 22050, None, speed=0.86, room=1.0)  # warm the caches
+    t0 = time.perf_counter()
+    voice_effect(a, 22050, None, speed=0.86, room=1.0)
+    assert time.perf_counter() - t0 < 0.1
+
+
+def test_router_applies_the_voice_effect_to_both_languages():
+    sr = 22050
+    track = VisemeTrack(np.array([0.0, 0.43]), ["A", "D"], end=0.86)
+    en = FakeAligningSynth(_sine(440, 1.0, sr), sr, track)
+    he = FakeSynth(_sine(440, 1.0, sr), sr)
+    router = TTSRouter(en=en, he=he, voice_speed=0.86, voice_room=1.0)
+    a, r, t = router.synth_visemes("hello", "en")
+    assert r == sr and len(a) == int(sr / 0.86)
+    assert np.allclose(t.times, [0.0, 0.5]) and t.end == pytest.approx(1.0)
+    a, _, t = router.synth_visemes("שלום", "he")
+    assert len(a) == int(sr / 0.86) and t is None
+    a, _ = router.synth("שלום", "he")
+    assert _peak_hz(a, sr) == pytest.approx(440 * 0.86, abs=3)
+
+
+def test_router_without_the_effect_is_unchanged():
+    pcm = _sine(440, 0.5)
+    router = TTSRouter(en=FakeSynth(pcm, 22050), he=FakeSynth(pcm, 22050))
+    a, _ = router.synth("hello", "en")
+    assert np.array_equal(a, pcm)

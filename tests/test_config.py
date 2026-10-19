@@ -1,3 +1,6 @@
+import pytest
+
+
 from mirror.config import TtsConfig, load_config
 
 DEFAULT_G2P = "renikud"  # tts.he_g2p: Task 20 Step 5 (A/B listening set)
@@ -57,3 +60,28 @@ def test_shipped_configs_set_the_lures():
         assert c.lures_enabled is True, path
         assert c.lure_min_idle_s == 120 and list(c.lure_interval_s) == [180, 420], path
         assert c.lure_quiet_hours == [], path
+
+
+def test_voice_effect_defaults_off():
+    cfg = TtsConfig()
+    assert cfg.voice_speed == 1.0 and cfg.voice_room == 0.0
+
+
+def test_shipped_configs_keep_the_voice_effect_off():
+    for name in ("mac", "orin"):
+        cfg = load_config(f"config/{name}.toml")
+        assert cfg.tts.voice_speed == 1.0 and cfg.tts.voice_room == 0.0
+
+
+def test_voice_effect_is_read_from_toml(tmp_path):
+    p = tmp_path / "c.toml"
+    p.write_text("[tts]\nvoice_speed = 0.86\nvoice_room = 1.0\n")
+    cfg = load_config(str(p))
+    assert cfg.tts.voice_speed == 0.86 and cfg.tts.voice_room == 1.0
+
+
+@pytest.mark.parametrize("kwargs", [{"voice_speed": 0.5}, {"voice_speed": 1.3},
+                                    {"voice_room": -0.1}, {"voice_room": 1.5}])
+def test_voice_effect_out_of_range(kwargs):
+    with pytest.raises(ValueError, match="voice_"):
+        TtsConfig(**kwargs)
