@@ -2,7 +2,7 @@
 """Make a Piper/LJSpeech-style Hebrew TTS training set with the ElevenLabs API.
 
     ELEVENLABS_API_KEY=... python tools/elevenlabs_dataset.py data/voice_he/sentences_*.txt \\
-        --voice-id VOICE_ID --out dataset_he [--model eleven_multilingual_v2] [--limit N]
+        --voice-id VOICE_ID --out dataset_he [--model eleven_v3] [--limit N]
         [--language-code he] [--stability 0.5] [--similarity 0.75] [--style 0.0]
         [--concurrency 2] [--dry-run | --metadata-only | --check [--stt-url URL]]
 
@@ -48,7 +48,7 @@ sys.path.insert(0, REPO)
 API_URL = "https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
 OUTPUT_FORMAT = "pcm_22050"
 SAMPLE_RATE = 22050
-DEFAULT_MODEL = "eleven_multilingual_v2"
+DEFAULT_MODEL = "eleven_v3"  # Hebrew: eleven_multilingual_v2 does not support it
 ID_PREFIX = "he_"
 MAX_TRIES = 5
 TIMEOUT_S = 60.0
@@ -452,8 +452,8 @@ def parse_args(argv=None):
     p.add_argument("--out", required=True, help="dataset directory")
     p.add_argument("--model", default=DEFAULT_MODEL)
     p.add_argument("--limit", type=int, help="only the first N sentences (by id)")
-    p.add_argument("--language-code", help="ISO code sent as language_code (only for"
-                   " models that support it; not eleven_multilingual_v2)")
+    p.add_argument("--language-code", default="he",
+                   help="ISO code sent as language_code (default he; pass '' to omit it)")
     p.add_argument("--stability", type=float, default=0.5)
     p.add_argument("--similarity", type=float, default=0.75, help="similarity_boost")
     p.add_argument("--style", type=float, default=0.0)
