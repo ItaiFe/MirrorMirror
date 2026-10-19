@@ -49,3 +49,11 @@ def test_shipped_configs_keep_piper_and_name_the_pocket_model():
     assert orin.pocket_model == "/home/mirror/mirror-models/pocket-tts-english-ipa.onnx"
     assert mac.pocket_voice == orin.pocket_voice == "javert"
     assert mac.pocket_threads == orin.pocket_threads == 2
+
+
+def test_shipped_configs_set_the_lures():
+    for path in ("config/mac.toml", "config/orin.toml"):
+        c = load_config(path).conversation
+        assert c.lures_enabled is True, path
+        assert c.lure_min_idle_s == 120 and list(c.lure_interval_s) == [180, 420], path
+        assert c.lure_quiet_hours == [], path

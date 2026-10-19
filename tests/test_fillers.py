@@ -70,3 +70,35 @@ def test_no_filler_budget_by_default(caplog):
     with caplog.at_level("WARNING", logger="mirror.fillers"):
         FillerBank(LongTTS(), {"en": ["abcdef"]}).prepare()
     assert not [r for r in caplog.records if r.levelname == "WARNING"]
+
+
+def test_languages_lists_only_languages_with_clips():
+    class Flaky(FakeTTS):
+        def synth_visemes(self, text, lang):
+            if lang == "he":
+                raise RuntimeError("no hebrew voice")
+            return super().synth_visemes(text, lang)
+
+    bank = FillerBank(Flaky(), {"en": ["a"], "he": ["א"]})
+    assert bank.languages() == []  # not prepared
+    bank.prepare()
+    assert bank.languages() == ["en"]
+
+
+def test_lure_copy():
+    from mirror.persona import LURES, singular_address
+
+    assert LURES["en"] == [
+        "Come closer, traveller… the glass has something to show you.",
+        "I see you there. Ask, and the mirror will answer.",
+        "Mirror, mirror… say the words, and I will wake.",
+        "The dust remembers you. Come, ask me anything.",
+    ]
+    assert LURES["he"] == [
+        "התקרבו, נוסעים… לזכוכית יש משהו להראות לכם.",
+        "אני רואה אתכם. שאלו, והמראה תענה.",
+        "מראה, מראה… אמרו את המילים, ואתעורר.",
+        "האבק זוכר אתכם. בואו, שאלו אותי הכול.",
+    ]
+    for line in LURES["he"]:
+        assert singular_address(line) == [], line  # the crowd, in plural

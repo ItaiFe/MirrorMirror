@@ -72,6 +72,13 @@ class ConversationConfig:
     filler_enabled: bool = True     # speak a short filler line while the LLM thinks
     filler_min_wait_s: float = 0.0  # ...only if no sentence is ready this soon (0: always)
     world_file: str = "config/oracle_world.md"  # the oracle's background; relative to the repo
+    # idle lures: a short line, now and then, while no one is talking to the mirror
+    lures_enabled: bool = True
+    lure_min_idle_s: float = 120.0  # no lure until this long after the last interaction
+    # [min, max]: each wait between lures (or since the last interaction) is drawn from it
+    lure_interval_s: list = field(default_factory=lambda: [180.0, 420.0])
+    # "HH:MM-HH:MM" local-time windows with no lures; a window may cross midnight
+    lure_quiet_hours: list = field(default_factory=list)
 
 
 @dataclass

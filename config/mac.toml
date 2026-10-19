@@ -45,3 +45,7 @@ max_reply_chars = 300
 filler_enabled = true      # a short pre-synthesized line while the LLM thinks
 filler_min_wait_s = 0.0    # skip the filler if a sentence is ready within this (0: always play)
 world_file = "config/oracle_world.md"   # oracle background; relative to the repo root
+lures_enabled = true       # now and then, while idle, murmur a short line to draw people in
+lure_min_idle_s = 120      # no lure until this long after the last conversation
+lure_interval_s = [180, 420]   # each wait between lures is drawn at random from this range
+lure_quiet_hours = []      # local-time windows without lures, e.g. ["02:00-08:00", "22:30-01:00"]

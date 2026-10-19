@@ -810,3 +810,309 @@ def test_next_sentence_synthesized_while_current_one_plays():
     ctl.on_segment(SEG)
     assert seen["overlap"] is True
     assert played_texts(p["player"]) == ["One.", "Two."]
+
+
+# --- idle lures ----------------------------------------------------------------
+
+import datetime as _dt  # noqa: E402
+import random as _random  # noqa: E402
+
+import pytest  # noqa: E402
+
+from mirror.conversation import in_quiet_hours, parse_quiet_hours  # noqa: E402
+
+LURE_CLIP = np.full(441, 0.75, dtype=np.float32)
+
+
+class FakeLures:
+    def __init__(self, langs=("en", "he"), track=None):
+        self.langs = list(langs)
+        self.track = track
+        self.picks = []
+
+    def languages(self):
+        return list(self.langs)
+
+    def pick(self, lang):
+        self.picks.append(lang)
+        return LURE_CLIP, 22050, self.track
+
+
+class WallClock:
+    def __init__(self, hhmm="14:00"):
+        self.set(hhmm)
+
+    def set(self, hhmm):
+        h, m = map(int, hhmm.split(":"))
+        self.now = _dt.datetime(2026, 8, 30, h, m)
+
+    def __call__(self):
+        return self.now
+
+
+LURE_CFG = dict(lures_enabled=True, lure_min_idle_s=120, lure_interval_s=[180, 180])
+
+
+def make_lured(script=(), lures=None, wall=None, cfg=None, **kw):
+    lures = lures if lures is not None else FakeLures()
+    wall = wall or WallClock()
+    parts = dict(stt=FakeSTT(list(script)), llm=kw.pop("llm", None) or FakeLLM(),
+                 tts=kw.pop("tts", None) or TextTTS(),
+                 player=kw.pop("player", None) or FakePlayer(),
+                 lights=FakeLights(), face=FakeFace())
+    clock = Clock()
+    ctl = Controller(cfg=cfg or ConversationConfig(**LURE_CFG), clock=clock, lures=lures,
+                     wall_clock=wall, rng=_random.Random(7), **parts, **kw)
+    return ctl, parts, clock, lures, wall
+
+
+def lure_plays(player):
+    return sum(1 for s in player.played if s is LURE_CLIP)
+
+
+def test_lure_config_defaults():
+    c = ConversationConfig()
+    assert c.lures_enabled is True and c.lure_min_idle_s == 120
+    assert list(c.lure_interval_s) == [180, 420] and c.lure_quiet_hours == []
+
+
+def test_no_lure_before_min_idle_and_interval():
+    ctl, p, clock, lures, _ = make_lured()
+    clock.t += 179
+    ctl.tick()
+    assert lures.picks == [] and p["player"].plays == 0
+
+
+def test_lure_after_min_idle_and_interval():
+    ctl, p, clock, lures, _ = make_lured()
+    clock.t += 180
+    ctl.tick()
+    assert lure_plays(p["player"]) == 1 and len(lures.picks) == 1
+    assert p["lights"].states == [State.SPEAKING, State.IDLE]
+    assert ctl.state == State.IDLE
+    # the next one waits for a fresh interval from this lure
+    clock.t += 179
+    ctl.tick()
+    assert lure_plays(p["player"]) == 1
+    clock.t += 1
+    ctl.tick()
+    assert lure_plays(p["player"]) == 2
+
+
+def test_min_idle_gates_a_short_interval():
+    cfg = ConversationConfig(lures_enabled=True, lure_min_idle_s=120,
+                             lure_interval_s=[10, 10])
+    ctl, p, clock, lures, _ = make_lured(cfg=cfg)
+    clock.t += 119
+    ctl.tick()
+    assert lures.picks == []
+    clock.t += 1
+    ctl.tick()
+    assert len(lures.picks) == 1
+
+
+def test_interval_is_randomized_within_range():
+    cfg = ConversationConfig(lures_enabled=True, lure_min_idle_s=0,
+                             lure_interval_s=[100, 200])
+    ctl, p, clock, lures, _ = make_lured(cfg=cfg)
+    gaps, last = [], clock.t
+    for _ in range(4000):
+        clock.t += 1
+        ctl.tick()
+        if len(lures.picks) > len(gaps):
+            gaps.append(clock.t - last)
+            last = clock.t
+    assert len(gaps) >= 20 and all(100 <= g <= 201 for g in gaps)
+    assert len(set(gaps)) > 3
+
+
+def test_lure_face_gets_visemes():
+    track = VisemeTrack(np.array([0.0]), ["B"])
+    ctl, p, clock, _, _ = make_lured(lures=FakeLures(track=track),
+                                     player=FakePlayer(levels=(0.4,)))
+    clock.t += 180
+    ctl.tick()
+    assert (State.SPEAKING, 0.4, "B") in p["face"].msgs
+    assert p["face"].msgs[-1] == (State.IDLE, 0.0, "X")
+
+
+def test_lure_languages_random_both_used():
+    ctl, p, clock, lures, _ = make_lured()
+    for _ in range(30):
+        clock.t += 180
+        ctl.tick()
+    assert set(lures.picks) == {"en", "he"}
+    assert len(lures.picks) == 30
+
+
+def test_lures_disabled_or_absent():
+    ctl, p, clock, lures, _ = make_lured(cfg=ConversationConfig(
+        lures_enabled=False, lure_min_idle_s=0, lure_interval_s=[1, 1]))
+    clock.t += 1000
+    ctl.tick()
+    assert lures.picks == []
+    ctl, p, clock = make([])  # no lure bank at all
+    clock.t += 10_000
+    ctl.tick()
+    assert p["player"].plays == 0
+
+
+def test_no_lure_when_bank_is_empty():
+    ctl, p, clock, lures, _ = make_lured(lures=FakeLures(langs=()))
+    clock.t += 1000
+    ctl.tick()
+    assert p["player"].plays == 0 and ctl.state == State.IDLE
+
+
+@pytest.mark.parametrize("window,now,quiet", [
+    ("02:00-08:00", "01:59", False),
+    ("02:00-08:00", "02:00", True),
+    ("02:00-08:00", "07:59", True),
+    ("02:00-08:00", "08:00", False),
+    ("22:30-06:00", "23:00", True),   # crosses midnight
+    ("22:30-06:00", "00:10", True),
+    ("22:30-06:00", "05:59", True),
+    ("22:30-06:00", "06:00", False),
+    ("22:30-06:00", "12:00", False),
+    ("22:30-06:00", "22:29", False),
+])
+def test_in_quiet_hours(window, now, quiet):
+    h, m = map(int, now.split(":"))
+    assert in_quiet_hours(parse_quiet_hours([window]), _dt.time(h, m)) is quiet
+
+
+def test_parse_quiet_hours_rejects_bad_windows():
+    assert parse_quiet_hours([]) == []
+    for bad in (["2-8"], ["02:00"], ["25:00-08:00"], ["02:00-08:60"], ["03:00-03:00"]):
+        with pytest.raises(ValueError):
+            parse_quiet_hours(bad)
+
+
+def test_bad_quiet_hours_fail_at_startup():
+    with pytest.raises(ValueError):
+        make_lured(cfg=ConversationConfig(lure_quiet_hours=["nonsense"]))
+
+
+def test_no_lure_during_quiet_hours_across_midnight():
+    cfg = ConversationConfig(lures_enabled=True, lure_min_idle_s=120,
+                             lure_interval_s=[180, 180], lure_quiet_hours=["22:00-06:30"])
+    wall = WallClock("23:30")
+    ctl, p, clock, lures, _ = make_lured(cfg=cfg, wall=wall)
+    clock.t += 1000
+    ctl.tick()
+    wall.set("03:00")
+    ctl.tick()
+    assert lures.picks == []
+    wall.set("06:30")  # quiet hours over: the overdue lure plays
+    ctl.tick()
+    assert len(lures.picks) == 1
+
+
+def test_no_lure_while_not_idle():
+    ctl, p, clock, lures, _ = make_lured([Transcript("mirror mirror", "en")])
+    ctl.on_segment(SEG)
+    assert ctl.state == State.LISTENING
+    clock.t += 5  # within listen_timeout_s
+    ctl.tick()
+    assert lures.picks == []
+
+
+def test_no_lure_while_busy():
+    holder = {}
+
+    def tick_mid_answer():
+        holder["clock"].t += 1000
+        holder["ctl"].tick()
+
+    ctl, p, clock, lures, _ = make_lured(
+        [Transcript("mirror mirror who am I", "en")],
+        player=FakePlayer(levels=(0.5,), during=tick_mid_answer))
+    holder.update(ctl=ctl, clock=clock)
+    ctl.on_segment(SEG)
+    assert lures.picks == [] and p["player"].plays == 1
+
+
+def test_interaction_resets_the_idle_timer():
+    ctl, p, clock, lures, _ = make_lured([Transcript("mirror mirror", "en")])
+    clock.t += 170
+    ctl.on_segment(SEG)  # wakes: LISTENING
+    clock.t += ConversationConfig().listen_timeout_s
+    ctl.tick()  # listening times out -> IDLE, the idle timer starts again
+    assert ctl.state == State.IDLE
+    clock.t += 179
+    ctl.tick()
+    assert lures.picks == []
+    clock.t += 1
+    ctl.tick()
+    assert len(lures.picks) == 1
+
+
+def test_non_wake_chatter_does_not_reset_the_idle_timer():
+    ctl, p, clock, lures, _ = make_lured([Transcript("nice art car", "en")])
+    clock.t += 170
+    ctl.on_segment(SEG)
+    clock.t += 10
+    ctl.tick()
+    assert len(lures.picks) == 1
+
+
+def test_segment_during_lure_dropped_and_after_lure_handled():
+    holder = {}
+
+    def mid_lure():
+        holder["ctl"].on_segment(SEG)  # dropped: busy
+
+    ctl, p, clock, lures, _ = make_lured(
+        [Transcript("mirror mirror who is fairest", "en")],
+        player=FakePlayer(levels=(0.5,), during=mid_lure), llm=FakeLLM())
+    holder["ctl"] = ctl
+    clock.t += 180
+    ctl.tick()
+    assert p["stt"].calls == 0 and lure_plays(p["player"]) == 1
+    p["player"].during = None
+    ctl.on_segment(SEG)
+    assert p["stt"].calls == 1
+    assert p["llm"].calls == [([], "who is fairest", "en")]
+    assert ctl.state == State.LISTENING
+
+
+def test_lure_leaves_history_untouched():
+    ctl, p, clock, lures, _ = make_lured(
+        [Transcript("mirror mirror who is fairest", "en")])
+    ctl.on_segment(SEG)
+    history = [dict(m) for m in ctl._history]
+    assert history
+    ctl._state = State.IDLE  # as if idle again, history kept (white-box)
+    clock.t += 1000
+    ctl.tick()
+    assert lures.picks and ctl._history == history
+    assert len(p["llm"].calls) == 1  # the lure never reached the LLM
+
+
+def test_lure_failure_never_escapes_tick(caplog):
+    class BadPlayer(FakePlayer):
+        def play(self, samples, sr, on_level):
+            raise OSError("speaker gone")
+
+    ctl, p, clock, lures, _ = make_lured(player=BadPlayer())
+    clock.t += 180
+    with caplog.at_level("ERROR", logger="mirror.conversation"):
+        ctl.tick()
+    assert ctl.state == State.IDLE and not ctl._busy
+    assert "lure failed" in caplog.text
+    # it does not retry on every tick
+    clock.t += 1
+    ctl.tick()
+    assert len(lures.picks) == 1
+
+
+def test_lure_with_failing_sinks_still_returns_to_idle():
+    class BadLights(FakeLights):
+        def set_state(self, state):
+            raise OSError("serial gone")
+
+    ctl, p, clock, lures, _ = make_lured()
+    ctl._lights = BadLights()
+    clock.t += 180
+    ctl.tick()
+    assert ctl.state == State.IDLE and lure_plays(p["player"]) == 1

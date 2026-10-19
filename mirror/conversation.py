@@ -4,12 +4,20 @@ An answer is a small pipeline: a worker streams the LLM reply sentence by senten
 a second worker synthesizes each sentence while the one before it plays, and the
 calling thread plays a filler line and then each sentence. Both workers are stopped
 and joined before _answer returns, whatever way it returns.
+
+While no one talks to it, tick() now and then plays an idle lure: a short
+pre-synthesized line, through the same play path as a filler, never touching the
+conversation history.
 """
 import logging
 import queue
+import random
+import re
 import threading
 import time
-from typing import Callable
+from datetime import datetime
+from datetime import time as dtime
+from typing import Callable, Optional
 
 import numpy as np
 
@@ -37,7 +45,9 @@ _END = object()  # end of the sentence / clip stream
 class Controller:
     def __init__(self, stt, llm, tts, player, lights, face, cfg: ConversationConfig,
                  clock: Callable[[], float] = time.monotonic, fillers=None,
-                 first_sentence_timeout_s: float = 20.0):
+                 first_sentence_timeout_s: float = 20.0, lures=None,
+                 wall_clock: Callable[[], datetime] = datetime.now,
+                 rng: Optional[random.Random] = None):
         self._stt = stt
         self._llm = llm
         self._tts = tts
@@ -58,6 +68,18 @@ class Controller:
         self._last_llm = {lang: clock() for lang in SYSTEM_PROMPT}
         self._rewarm_thread: "threading.Thread | None" = None
         self._closed = threading.Event()
+        # idle lures; quiet hours are checked against the local wall clock
+        self._lures = lures  # FillerBank of LURES or None
+        self._wall_clock = wall_clock
+        self._rng = rng or random.Random()
+        self._quiet_hours = parse_quiet_hours(cfg.lure_quiet_hours)
+        lo, hi = (float(x) for x in cfg.lure_interval_s)
+        if not 0 <= lo <= hi:
+            raise ValueError(f"lure_interval_s must be [min, max] with 0 <= min <= max, "
+                             f"got {cfg.lure_interval_s!r}")
+        self._lure_interval = (lo, hi)
+        self._last_interaction = clock()
+        self._next_lure_at = self._last_interaction + self._draw_lure_wait()
 
     def mark_unwarmed(self, lang: str) -> None:
         """The language's prompt cache is cold: re-warm it at the next idle tick."""
@@ -98,6 +120,61 @@ class Controller:
                 log.info("listening timed out")
                 self._go_idle()
             self._maybe_rewarm()
+            lure = self._due_lure()
+            if lure is None:
+                return
+            self._busy = True  # segments are dropped while the lure plays
+        try:
+            self._play_lure(*lure)
+        finally:
+            self._busy = False
+
+    # --- idle lures -------------------------------------------------------------
+
+    def _draw_lure_wait(self) -> float:
+        return self._rng.uniform(*self._lure_interval)
+
+    def _mark_interaction(self) -> None:
+        """Someone talked to the mirror: restart the idle timer."""
+        self._last_interaction = self._clock()
+        self._next_lure_at = self._last_interaction + self._draw_lure_wait()
+
+    def _due_lure(self):
+        """(lang, clip) if a lure should play now, else None. Never raises."""
+        try:
+            if (self._lures is None or not self._cfg.lures_enabled
+                    or self._state != State.IDLE or self._closed.is_set()):
+                return None
+            now = self._clock()
+            if (now - self._last_interaction < self._cfg.lure_min_idle_s
+                    or now < self._next_lure_at):
+                return None
+            if in_quiet_hours(self._quiet_hours, self._wall_clock().time()):
+                return None
+            langs = self._lures.languages()
+            if not langs:
+                return None
+            # a lure is due: whatever happens next, wait a fresh interval for the next
+            self._next_lure_at = now + self._draw_lure_wait()
+            lang = self._rng.choice(sorted(langs))
+            clip = self._lures.pick(lang)
+            return None if clip is None else (lang, clip)
+        except Exception:
+            log.exception("choosing a lure failed")
+            return None
+
+    def _play_lure(self, lang: str, clip) -> None:
+        """Speak the lure (SPEAKING with visemes), then back to IDLE. The history
+        is not touched. Never raises an Exception."""
+        log.info("lure (%s)", lang)
+        try:
+            self._play_clip(*clip)
+        except Exception:
+            log.exception("lure failed")
+        finally:
+            self._set_state(State.IDLE)
+            # the wait for the next lure starts once this one is over
+            self._next_lure_at = self._clock() + self._draw_lure_wait()
 
     def _maybe_rewarm(self) -> None:
         """Re-warm, in the background, the prompt cache of the language idle longest,
@@ -142,6 +219,7 @@ class Controller:
             text = wake.remainder
         else:  # LISTENING
             text = transcript.text if wake is None else wake.remainder
+        self._mark_interaction()
         if text:
             self._answer(text, transcript.lang)
         else:
@@ -303,8 +381,10 @@ class Controller:
         self._set_state(State.LISTENING)
 
     def _go_idle(self) -> None:
+        """End of a conversation (a lure never comes here)."""
         self._history = []
         self._set_state(State.IDLE)
+        self._mark_interaction()  # the idle timer starts now
 
     def _set_state(self, state: State) -> None:
         if state == self._state:
@@ -312,6 +392,40 @@ class Controller:
         self._state = state
         _guarded(self._lights.set_state, state)
         _guarded(self._face.send, state, 0.0)
+
+
+_QUIET = re.compile(r"^\s*(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})\s*$")
+
+
+def parse_quiet_hours(windows) -> list:
+    """["HH:MM-HH:MM", ...] -> [(start, end) datetime.time pairs]; ValueError if a
+    window is malformed or empty (start == end)."""
+    parsed = []
+    for w in windows:
+        m = _QUIET.match(w) if isinstance(w, str) else None
+        if m is None:
+            raise ValueError(f"lure_quiet_hours: {w!r} is not \"HH:MM-HH:MM\"")
+        h1, m1, h2, m2 = map(int, m.groups())
+        try:
+            start, end = dtime(h1, m1), dtime(h2, m2)
+        except ValueError as e:
+            raise ValueError(f"lure_quiet_hours: {w!r}: {e}") from None
+        if start == end:
+            raise ValueError(f"lure_quiet_hours: {w!r} is empty (start == end)")
+        parsed.append((start, end))
+    return parsed
+
+
+def in_quiet_hours(windows, now: dtime) -> bool:
+    """True if now falls in a [start, end) window; a window with end < start
+    crosses midnight."""
+    for start, end in windows:
+        if start < end:
+            if start <= now < end:
+                return True
+        elif now >= start or now < end:
+            return True
+    return False
 
 
 def _get(q: "queue.Queue", timeout: float):

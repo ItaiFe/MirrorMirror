@@ -27,7 +27,7 @@ from mirror.conversation import Controller
 from mirror.fillers import FillerBank
 from mirror.lights import LogLights, WledSerial
 from mirror.llm import LANG_SLOTS, LlamaServerLLM, LLMError
-from mirror.persona import FILLERS, load_world
+from mirror.persona import FILLERS, LURES, load_world
 from mirror.states import State
 from mirror.stt import WhisperServerSTT
 from mirror.vad import Segmenter, SileroVad
@@ -303,6 +303,21 @@ def build_hebrew_tts(tts_cfg: TtsConfig):
 
 
 FILLER_BUDGET_S = 2.5  # persona.py's filler length; Pocket voices can run past it
+# persona.py's lure length (~3 s) plus slack. A lure plays inside controller.tick(),
+# so it also holds off the main loop's watchdog ping for that long: keep them short.
+LURE_BUDGET_S = 3.5
+
+
+def build_lures(tts, conv_cfg):
+    """The idle-lure bank, prepared (a WARNING for any lure over LURE_BUDGET_S);
+    None when lures are disabled."""
+    if not conv_cfg.lures_enabled:
+        return None
+    lures = FillerBank(tts, LURES, max_clip_s=LURE_BUDGET_S, kind="lure")
+    t0 = time.monotonic()
+    lures.prepare()
+    log.info("lure lines ready in %.1f s", time.monotonic() - t0)
+    return lures
 
 
 def build_tts(tts_cfg: TtsConfig):
@@ -396,11 +411,12 @@ def run(cfg: Config, wav_path=None, config_path=None) -> int:
         t0 = time.monotonic()
         fillers.prepare()
         log.info("filler lines ready in %.1f s", time.monotonic() - t0)
+        lures = build_lures(tts, cfg.conversation)
         unwarmed = warm_llm(llm)
         open_output(output, tts_rate)
         player = LatencyPlayer(output)
         controller = Controller(stt, llm, tts, player, gate, face, cfg.conversation,
-                                fillers=fillers,
+                                fillers=fillers, lures=lures,
                                 first_sentence_timeout_s=cfg.servers.timeout_s)
         for lang in unwarmed:
             controller.mark_unwarmed(lang)
@@ -441,7 +457,10 @@ def run(cfg: Config, wav_path=None, config_path=None) -> int:
                     dropped = _drain(segments)
                     if dropped:
                         log.info("dropped %d stale segment(s)", dropped)
-            controller.tick()
+            controller.tick()  # may speak an idle lure (a few seconds)
+            if gate.answered.is_set():  # a lure spoke: what was queued before it is stale
+                gate.answered.clear()
+                _drain(segments)
             if source is not None and source.done.is_set() and segments.empty():
                 log.info("wav finished; state %s", controller.state.value)
                 break

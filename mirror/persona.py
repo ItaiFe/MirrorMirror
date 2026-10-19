@@ -127,6 +127,23 @@ FILLERS: dict[str, list[str]] = {
     ],
 }
 
+# Spoken now and then while no one is around, to draw passers-by in; each one is
+# at most ~3 s long. Hebrew addresses the crowd, in plural.
+LURES: dict[str, list[str]] = {
+    "en": [
+        "Come closer, traveller… the glass has something to show you.",
+        "I see you there. Ask, and the mirror will answer.",
+        "Mirror, mirror… say the words, and I will wake.",
+        "The dust remembers you. Come, ask me anything.",
+    ],
+    "he": [
+        "התקרבו, נוסעים… לזכוכית יש משהו להראות לכם.",
+        "אני רואה אתכם. שאלו, והמראה תענה.",
+        "מראה, מראה… אמרו את המילים, ואתעורר.",
+        "האבק זוכר אתכם. בואו, שאלו אותי הכול.",
+    ],
+}
+
 _COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
 _SEPARATOR = re.compile(r"^---[ \t]*$", re.MULTILINE)
 

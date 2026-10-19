@@ -676,3 +676,33 @@ def test_systemd_units_use_the_watchdog():
     import mirror.voice_main as vm
     assert f"WatchdogSec={vm.WATCHDOG_SEC}" in voice
     assert "WatchdogSec=" in pathlib.Path("deploy/systemd/mirror-face.service").read_text()
+
+
+def test_build_lures_prepares_with_a_budget_and_skips_when_disabled(caplog):
+    import numpy as np
+
+    import mirror.voice_main as vm
+    from mirror.config import ConversationConfig
+    from mirror.persona import LURES
+
+    class TTS:
+        def __init__(self):
+            self.calls = []
+
+        def synth_visemes(self, text, lang):
+            self.calls.append((text, lang))
+            seconds = 4.0 if text == LURES["en"][0] else 2.0
+            return np.zeros(int(seconds * 22050), np.float32), 22050, None
+
+    assert vm.LURE_BUDGET_S == 3.5
+    tts = TTS()
+    with caplog.at_level("WARNING", logger="mirror.fillers"):
+        lures = vm.build_lures(tts, ConversationConfig())
+    assert sorted(lures.languages()) == ["en", "he"]
+    assert len(tts.calls) == len(LURES["en"]) + len(LURES["he"])
+    warnings = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+    assert len(warnings) == 1 and LURES["en"][0] in warnings[0]
+
+    tts = TTS()
+    assert vm.build_lures(tts, ConversationConfig(lures_enabled=False)) is None
+    assert tts.calls == []
