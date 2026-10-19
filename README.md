@@ -124,6 +124,9 @@ monitor, or the LED panels once NovaLCT is done).
 3. **Reboot**: `sudo reboot`. The Orin logs itself in, and about a minute later the
    face is on screen and the mirror listens.
 
+The script also sets the system timezone to `Asia/Jerusalem` (override with
+`--timezone TZ`), because the lures' quiet hours and the oracle's time-of-day talk use local time.
+
 **Updating** after code changes: `cd ~/MirrorMirror && git pull && deploy/setup_orin.sh`.
 The script is safe to re-run: finished steps are skipped and the running services are
 restarted with the new code.

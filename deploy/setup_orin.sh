@@ -3,29 +3,34 @@
 # Run it from the repo checkout, as the mirror's own user (not root; it calls
 # sudo where it has to), with internet access:
 #
-#   deploy/setup_orin.sh [--with-mms]
+#   deploy/setup_orin.sh [--with-mms] [--timezone TZ]
 #
 #   --with-mms   also install torch (NVIDIA's JetPack wheel) + transformers for the
 #                MMS Hebrew fallback voice (tts.he_engine = "mms"). Off by default:
 #                the Phonikud voice needs neither.
+#   --timezone TZ  system timezone to set (default Asia/Jerusalem); quiet hours and the
+#                oracle's time-of-day use local time.
 #
 # It is idempotent: re-run it after every `git pull`. Finished steps are skipped,
 # and mirror services that are already running are restarted with the new code.
 # Overridable: WHISPER_REF, LLAMA_REF (git tags to build), NVP_MODE (power mode).
 set -euo pipefail
 
-usage() { sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'; }
 step() { printf '\n== %s\n' "$*"; }
 warn() { printf 'WARNING: %s\n' "$*" >&2; }
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 
 WITH_MMS=0
-for arg in "$@"; do
-    case "$arg" in
+TIMEZONE="Asia/Jerusalem"
+while [ $# -gt 0 ]; do
+    case "$1" in
         --with-mms) WITH_MMS=1 ;;
+        --timezone) [ $# -ge 2 ] || { usage >&2; exit 2; }; TIMEZONE="$2"; shift ;;
         -h|--help) usage; exit 0 ;;
         *) usage >&2; exit 2 ;;
     esac
+    shift
 done
 
 [ "$(id -u)" -ne 0 ] || die "run this as the mirror user, not as root (it uses sudo itself)"
@@ -73,6 +78,13 @@ sudo apt-get install -y build-essential cmake git curl libssl-dev \
     x11-xserver-utils dconf-cli
 # Serial port of the WLED ESP32 (/dev/ttyUSB0) and the sound card.
 sudo usermod -aG dialout,audio "$ME"
+# Quiet hours and the oracle's time-of-day talk use local time.
+if [ "$(timedatectl show -p Timezone --value)" = "$TIMEZONE" ]; then
+    echo "skip  timezone already $TIMEZONE"
+else
+    sudo timedatectl set-timezone "$TIMEZONE"
+    echo "set   timezone to $TIMEZONE"
+fi
 
 step "2/8 whisper.cpp $WHISPER_REF and llama.cpp $LLAMA_REF with CUDA -> $BIN"
 export PATH="/usr/local/cuda/bin:$PATH"

@@ -67,4 +67,5 @@ world_file = "config/oracle_world.md"   # oracle background; relative to the rep
 lures_enabled = true       # now and then, while idle, murmur a short line to draw people in
 lure_min_idle_s = 120      # no lure until this long after the last conversation
 lure_interval_s = [180, 420]   # each wait between lures is drawn at random from this range
+# Quiet hours and the oracle's time-of-day use the system's local time; setup_orin.sh sets it to Asia/Jerusalem.
 lure_quiet_hours = []      # local-time windows without lures, e.g. ["02:00-08:00", "22:30-01:00"]

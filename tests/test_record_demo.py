@@ -93,3 +93,14 @@ def test_face_message_at_returns_only_new_events():
     assert msg is None and i == 1
     msg, i = rd.face_message_at(events, 1.5, i)
     assert msg[1] == "speaking" and i == 3
+
+
+def test_demo_face_uses_the_floating_face_params_from_config():
+    from mirror.config import load_config
+    from mirror.face.bank import load_bank
+    from mirror.face.sprite import FloatParams
+
+    cfg = load_config(os.path.join(os.path.dirname(__file__), os.pardir, "config", "orin.toml"))
+    bank_dir = os.path.join(os.path.dirname(__file__), os.pardir, cfg.face.bank)
+    face = rd.make_face(load_bank(bank_dir), cfg)
+    assert face.float_params == FloatParams.from_config(cfg.face)

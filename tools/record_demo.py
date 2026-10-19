@@ -562,21 +562,29 @@ def subtitles_at(doc, t):
     return heard, said
 
 
+def make_face(bank, cfg):
+    """The app's SpriteFace (floating face from the config), with a fixed seed."""
+    import random
+
+    from mirror.face.sprite import FloatParams, SpriteFace
+
+    return SpriteFace(bank, rng=random.Random(7),
+                      float_params=FloatParams.from_config(cfg.face))
+
+
 def cmd_render(args) -> None:
     import cv2
 
     from mirror.config import load_config, resolve_repo_path
     from mirror.face.app import step_mouth
     from mirror.face.bank import load_bank
-    from mirror.face.sprite import SpriteFace
 
     cfg = load_config(args.config)
     with open(os.path.join(args.work_dir, "events.json"), encoding="utf-8") as f:
         doc = json.load(f)
     wav = os.path.join(args.work_dir, "timeline.wav")
     bank = load_bank(args.bank or resolve_repo_path(cfg.face.bank, args.config))
-    import random
-    face = SpriteFace(bank, rng=random.Random(7))
+    face = make_face(bank, cfg)
     size = bank.size * SCALE
     subs = Subtitler(size)
     if not subs.hebrew_ok and any(_has_hebrew(t.get("heard", "") + t.get("reply", ""))
