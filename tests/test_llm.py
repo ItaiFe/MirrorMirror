@@ -649,3 +649,19 @@ def test_only_an_echo_is_an_empty_reply():
 ])
 def test_only_listed_direction_words_make_a_stage_direction(raw, clean):
     assert trim_reply(raw, 3, 300) == clean
+
+
+def test_crude_sentences_are_dropped():
+    # the 4B model's Hebrew now and then picks a crude word: that sentence goes
+    assert trim_reply("כן, אהבה מחכה לכם. היא יודעת מתי לחרוף את החרמנים שלה.",
+                      3, 300) == "כן, אהבה מחכה לכם."
+    assert trim_reply("You will dance. What a fucking night.", 3, 300) == "You will dance."
+    assert trim_reply("Horny camels await.", 3, 300) == ""
+    # innocent words that only contain the letters stay
+    assert trim_reply("Sussex is far. A cocktail of stars.", 3, 300) == \
+        "Sussex is far. A cocktail of stars."
+    assert trim_reply("קחו כוס מים.", 3, 300) == "קחו כוס מים."
+    with patch("mirror.llm.requests.post",
+               return_value=_sse("Fine words. ", "Then shit happens. ", "More.")):
+        out = list(LlamaServerLLM("http://x", 5).reply_stream([], "hi", "en"))
+    assert out == ["Fine words.", "More."]

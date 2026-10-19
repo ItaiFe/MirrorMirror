@@ -124,6 +124,20 @@ def _is_angle_echo(sentence: str) -> bool:
     return s.startswith(_ECHO_START) or any(e in s for e in _ECHO_ANYWHERE)
 
 
+# Crude words a sentence is dropped for (the 4B model's Hebrew now and then slips).
+# Whole words only: "Sussex", "cocktail", "כוס" (a cup) and "מזונה" (her food) stay.
+_CRUDE = re.compile(
+    r"\b(?:fuck\w*|shit\w*|horn(?:y|ier|iest)|sex(?:y|ual|ually)?|penis|dicks?|"
+    r"bitch\w*|porn\w*|cunts?|assholes?|whores?)\b"
+    r"|(?<![א-ת])[והבלשכ]{0,2}(?:חרמנ[א-ת]*|חרמן|זונה|זונות|שרמוט[א-ת]*|מניאק[א-ת]*|"
+    r"סקס|סקסי[א-ת]*|פאקינג)(?![א-ת])",
+    re.IGNORECASE)
+
+
+def _is_crude(sentence: str) -> bool:
+    return _CRUDE.search(sentence) is not None
+
+
 def _cut(text: str, max_chars: int) -> str:
     """Shorten text to at most max_chars at a word boundary, ending in "…"."""
     if max_chars < 2:
@@ -154,12 +168,12 @@ def _pop_sentences(buf: str) -> tuple[list[str], str]:
 
 
 def _clean_sentence(raw: str) -> str:
-    """A cleaned sentence, or "" if it is an echo of the angle note."""
+    """A cleaned sentence, or "" if it echoes the angle note or is crude."""
     raw = _BRACKETED_ECHO.sub(" ", raw)  # a whole note, with what follows it
     if _is_angle_echo(raw):
         return ""
     sentence = _clean(raw)
-    return "" if _is_angle_echo(sentence) else sentence
+    return "" if _is_angle_echo(sentence) or _is_crude(sentence) else sentence
 
 
 def _finished(sentence: str) -> bool:
