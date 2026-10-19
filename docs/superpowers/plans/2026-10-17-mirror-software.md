@@ -672,3 +672,24 @@ Commit: `feat: systemd watchdog pings from voice and face`
 Commit: `feat: idle lures — the oracle beckons passers-by`
 
 **Order:** 24 then 25 (both touch voice_main.py / conversation.py).
+
+---
+
+### Task 26: Varied oracle answers (and keep words inside parentheses)
+
+**Why (live demo, 2026-10-19):** the user found the answers repetitive. Most replies reuse the same imagery ("shimmer", "thread of silver", "ochre", "violet", "star", "dust remembers"), because the persona prompt lists those images and every request carries identical instructions. The 4B model on the Orin should be better than the Mac's 1B, but both need a variety signal. Separately, the stage-direction filter removed words the model put in parentheses mid-sentence ("it doesn't (hold) a pattern. It simply (is).") and left broken sentences.
+
+**Files:** `mirror/persona.py`, `mirror/llm.py`, `mirror/conversation.py` (pass a per-request angle), `config/*.toml` + `mirror/config.py` (sampling), `tools/variety_check.py` (new), tests.
+
+- **Angle per answer.** `persona.pick_angle(rng, recent: list[str]) -> Angle(mode, imagery)`.
+  - `mode` is one of riddle, prophecy, playful dare, tiny story, practical advice in disguise, question back, cheeky compliment, or blunt truth with a wink.
+  - `imagery` is one of ≥ 25 image worlds: fire, water, birds, flamingos, music and drums, bicycles, art cars, food and tea, colours, numbers, animals, weather and wind, the Temple, the Man, shoes, maps, keys, clocks, seeds, salt, honey, moths, lanterns, kites, sand dunes, the moon's phases, and more.
+  - Avoid repeating the last 3 modes and the last 5 image worlds (kept in the Controller per conversation, and across conversations for a short while).
+  - The angle is appended as a short hidden instruction at the END of the user message, in the visitor's language (Hebrew translation for he), e.g. "(Answer as a playful dare, using images of bicycles. Start by answering their actual question.)". The system prompt stays byte-identical, so the prompt cache stays warm.
+- **Persona prompt:** remove the fixed imagery list (stars, mists, threads, reflections). Add: answer the visitor's actual question in the first sentence; never reuse an image or phrase from your previous replies; avoid stock words (shimmer, thread, whisper, ochre, violet, tapestry, echo, dust remembers) unless they truly fit. Same for Hebrew. Keep the oracle's mysterious, playful, never-cruel character and length limits. Re-check the few-shot examples so they don't model the overused images.
+- **Sampling** in the config, sent with each request: `temperature 0.95`, `top_p 0.95`, `min_p 0.05`, `repeat_penalty 1.12`, `presence_penalty 0.4`, `frequency_penalty 0.3`. Check against llama-server v0.7.0's /v1/chat/completions accepted fields, and set them in config for both TOMLs.
+- **Parentheses fix:** `_clean` removes a parenthetical only when it is a stage direction: it stands alone as the whole sentence, or sits at the start or end of a sentence and looks like a direction (≤ 4 words, lowercase or adverb-like such as "softly", "laughs", "leans in"). A mid-sentence parenthetical keeps its words without the brackets. Asterisk and bracket directions are unchanged. Tests: "it doesn't (hold) a pattern." → "it doesn't hold a pattern."; "(softly) Look up." → "Look up."; "Look up. (pause)" → "Look up."; Hebrew equivalents.
+- **`tools/variety_check.py`:** run N=20 requests (10 different burner questions × 2, and 5 repeats of the same question) against the running llama-server with the full pipeline's prompt plus angle. Report distinct-1 and distinct-2 ratios across replies, the most frequent content words, and the share of replies containing any stock word. A `--no-angle` switch gives a before/after comparison. Unit-test the metrics with fixed strings.
+- **Tests:** angle choice is deterministic with a seeded rng and respects the no-repeat windows; the user message carries the angle while the system prompt is unchanged between two requests; sampling fields are present in the request body; the parentheses cases above.
+
+Commit: `feat: varied oracle answers (angles, sampling); keep mid-sentence parentheticals`
