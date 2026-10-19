@@ -241,6 +241,13 @@ class RenikudG2P:
         return map_renikud_ipa(self._raw(text), voice_symbols_only=False)
 
 
+def keep_voice_symbols(ipa: str, known) -> str:
+    """The Hebrew voice's input: the G2P's IPA with every character the voice's
+    phoneme_id_map doesn't have dropped. tools/prepare_piper_dataset.py uses this
+    too, so training transcripts match what the voice is fed at runtime."""
+    return "".join(c for c in ipa if c in known).strip()
+
+
 class PhonikudHebrewTTS:
     """Plain Hebrew text -> G2P (Phonikud by default, or the given one, e.g.
     RenikudG2P) -> IPA -> the Phonikud Piper VITS voice (ONNX, CPU)."""
@@ -266,8 +273,7 @@ class PhonikudHebrewTTS:
 
     def phonemes(self, text: str) -> str:
         """IPA for plain Hebrew text (characters the voice doesn't know are dropped)."""
-        ipa = self._g2p.phonemize(text)
-        return "".join(c for c in ipa if c in self._known).strip()
+        return keep_voice_symbols(self._g2p.phonemize(text), self._known)
 
     def synth(self, text: str) -> tuple[np.ndarray, int]:
         ipa = self.phonemes(text)
