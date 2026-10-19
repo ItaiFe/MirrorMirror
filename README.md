@@ -314,12 +314,14 @@ build order). Tick them off.
 - [ ] Left alone for 15 minutes: the screen does not blank.
 
 **3. The voice loop works at a desk**
+- [ ] **First**, with everything running: `free -m` shows at least 0.5 GB available
+      (`tegrastats`: `RAM x/7620MB` under about 7100). If not, see "Memory on the Orin"
+      below for the order of cuts.
 - [ ] ReSpeaker plugged in; `arecord -l` and `aplay -l` both list it.
 - [ ] "Mirror, mirror on the wall, what do you see?" gets a spoken English answer.
 - [ ] "מראה, מראה שעל הקיר, מה צופן לי העתיד?" gets a spoken Hebrew answer.
 - [ ] Delay from the end of your question to the first sound is acceptable (target 2-4 s;
       `journalctl --user -u mirror-voice | grep latency`).
-- [ ] While it answers, `tegrastats` shows RAM under 7 GB (the `RAM x/7620MB` field).
 
 **4. The face comes alive**
 - [ ] Idle: it blinks. Listening, thinking and speaking each look different.
@@ -337,6 +339,85 @@ build order). Tick them off.
 - [ ] Afterwards: `systemctl --user show -p NRestarts mirror-voice mirror-face mirror-llm mirror-stt`
       shows few or no restarts, and `tegrastats` temperatures stayed reasonable.
 - [ ] Pull the power mid-answer, plug it back in: everything comes back on its own.
+
+### Memory on the Orin
+
+The 8 GB Orin is tight: with everything running, the estimate is about 7.1-7.4 GB of the
+7.62 GB `tegrastats` shows. That counts llama-server at about 3.8 GB (with the 8-bit KV
+cache), whisper-server at about 1 GB, mirror-voice at about 1 GB, mirror-face at about
+0.2 GB, and JetPack plus GNOME at about 1.3 GB. There is no swap file, only zram. If memory
+runs out, the kernel kills a server mid-event, which costs a 10-20 s restart and fallback
+replies. **Measure memory first, before the rest of step 3.** Start everything, ask one
+English and one Hebrew question, then run:
+
+```sh
+free -m          # the "available" column, in MB
+tegrastats       # RAM x/7620MB, once a second (Ctrl-C to stop)
+```
+
+**Target: at least 0.5 GB free**, meaning `available` at 500 MB or more, or RAM under
+about 7100/7620MB. If you are short, make these cuts in order. After each one, restart
+that service and measure again. Stop as soon as you reach the target.
+
+The llama-server cuts (a-c) each replace the unit's command line with a drop-in. Write
+the whole line, with your changes, into
+`~/.config/systemd/user/mirror-llm.service.d/override.conf`.
+`systemctl --user edit mirror-llm` opens that file in an editor. The empty `ExecStart=`
+line clears the original command first. Here is an example with cuts a and b both made:
+
+```sh
+mkdir -p ~/.config/systemd/user/mirror-llm.service.d
+cat > ~/.config/systemd/user/mirror-llm.service.d/override.conf <<'CONF'
+[Service]
+ExecStart=
+ExecStart=%h/mirror-bin/llama-server -m %h/mirror-models/${LLM_MODEL} -ngl 99 -c 8192 -np 2 --cache-reuse 256 -fa on -ctk q8_0 -ctv q8_0 -ub 256 --host 127.0.0.1 --port 8080
+CONF
+systemctl --user daemon-reload && systemctl --user restart mirror-llm
+```
+
+a. **Drop `--swa-full`** (saves about 0.3 GB with the 8-bit KV cache). Remove it from the
+   line. The cost: the English slot re-processes about 500 prompt tokens per turn again,
+   which adds to the English reply latency.
+b. **`-ub 256`** (saves about 0.25 GB of compute buffer). Add it to the line. Prompt
+   processing gets a little slower.
+c. **`-c 6144`** (a smaller KV cache). Change `-c 8192` to `-c 6144`. Each of the two
+   slots then holds 3072 tokens, which is still enough for the system prompt and a short
+   history.
+d. **Go back to the stock Whisper small model** (saves about 0.4 GB). Hebrew recognition
+   gets worse: in the Task 22 tests, 8/16 Hebrew wakes instead of 16/16. Check that
+   `~/mirror-models/ggml-small.bin` exists, then run:
+
+   ```sh
+   mkdir -p ~/.config/systemd/user/mirror-stt.service.d
+   printf '[Service]\nEnvironment=STT_MODEL=ggml-small.bin\n' \
+       > ~/.config/systemd/user/mirror-stt.service.d/override.conf
+   systemctl --user daemon-reload && systemctl --user restart mirror-stt
+   ```
+
+e. **Advanced: a bare X session instead of GNOME** (saves about 0.5-0.8 GB: gnome-shell,
+   evolution, tracker and gnome-software no longer run). This has not been tried on the
+   Orin yet. GDM keeps autologging you in on Xorg, so `DISPLAY=:0` and the
+   `%t/gdm/Xauthority` path that the face units use stay valid. Only the session changes,
+   from GNOME to Openbox with no panels, so mirror-face is the only window. The apt
+   install needs the network once:
+
+   ```sh
+   sudo apt install -y openbox            # installs /usr/share/xsessions/openbox.desktop
+   sudo mkdir -p /var/lib/AccountsService/users
+   sudo tee /var/lib/AccountsService/users/$USER >/dev/null <<'CONF'
+   [User]
+   Session=openbox
+   XSession=openbox
+   CONF
+   sudo reboot
+   ```
+
+   If that file already exists, edit its two lines instead of replacing it. After the
+   reboot, the face should come up on its own (the user units start with the login, not
+   with GNOME). Check it with `ps -e | grep -c gnome-shell`, which should print 0. Then
+   check `free -m` again. Without GNOME, its blanking settings no longer apply. The
+   units' `xset s off -dpms` covers that. Run the step-2 "left alone for 15 minutes"
+   check again. To undo this cut, set both lines back to `ubuntu` and reboot.
 
 **7. Into the frame**
 - [ ] Mic at face height behind foam; the wake phrase works from where people will stand.
