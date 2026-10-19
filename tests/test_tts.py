@@ -441,6 +441,9 @@ def _fake_pocket(monkeypatch, durations=None):
 
         def __init__(self, path, providers=None, num_threads=2):
             record["inits"].append((path, providers, num_threads))
+            record["model"] = self
+            self._encoder_blob = "x" * 100  # the cloning encoder, base64 in the model
+            self._voice_blobs = {"javert": "y" * 10}
 
         def voices(self):
             return ["alba", "javert", "michael"]
@@ -819,3 +822,17 @@ def test_shorten_pauses_caps_long_gaps_and_keeps_speech():
     assert float(np.abs(out).sum()) == pytest.approx(float(np.abs(audio).sum()), rel=0.02)
     assert shorten_pauses(tone, sr) is tone
     assert len(shorten_pauses(np.zeros(0, np.float32), sr)) == 0
+
+
+def test_pocket_frees_blobs_it_never_uses(tmp_path, monkeypatch):
+    record = _fake_pocket(monkeypatch)
+    from mirror.tts import PocketTTS
+
+    PocketTTS("m.onnx", voice="javert")
+    # the cloning encoder (~50 MB) is never used at runtime; built-in voices are
+    assert record["model"]._encoder_blob is None
+    assert record["model"]._voice_blobs == {"javert": "y" * 10}
+    f = tmp_path / "v.npy"
+    np.save(f, np.zeros((1, 2, 3), np.float32))
+    PocketTTS("m.onnx", voice_file=str(f))
+    assert record["model"]._encoder_blob is None and record["model"]._voice_blobs == {}

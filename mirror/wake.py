@@ -12,7 +12,9 @@ _HEBREW_VARIANTS = {"מראה", "מראא", "מרא", "מירא"}
 _TRANSLITERATED_MIRROR = {"מיר", "מירור", "מירר"}
 # Repeats after the first two wake tokens are stripped only on these exact spellings.
 _REPEAT_WORDS = {"mirror", "mirrors"} | _TRANSLITERATED_MIRROR | _HEBREW_VARIANTS
-_TAILS = (("on", "the", "wall"), ("שעל", "הקיר"), ("על", "הקיר"))
+_TAILS = (("on", "the", "wall"), ("שעל", "הקיר"), ("על", "הקיר"),
+          # English "on the wall" in Hebrew letters (heard live: "מירר מירר על הוול")
+          ("און", "דה", "וול"), ("על", "הוול"), ("על", "דה", "וול"))
 _HALLUCINATIONS = {"thank you", "thanks for watching", "you", "תודה", "תודה רבה", "תודה שצפיתם"}
 _TAG_RE = re.compile(r"^\s*(\[[^\]]*\]|\([^)]*\))\s*$")
 _NIQQUD_RE = re.compile("[֑-ׇ]")

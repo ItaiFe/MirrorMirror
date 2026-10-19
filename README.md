@@ -77,7 +77,7 @@ uv pip install --python .venv -e '.[pocket]'
 `make models` fetches `pocket-tts-english-ipa.onnx` (232 MB, pinned, sha256-checked);
 `setup_orin.sh` installs the package. Then in the config's `[tts]`:
 
-- `engine = "pocket"`; `pocket_threads = 2` (the upstream design point).
+- `engine = "pocket"`; `pocket_threads = 4` (RTF 0.20 vs 0.24 at 2 threads on an M2; upstream designs for 2).
 - `pocket_voice`: a built-in voice. `javert` (CC0, the deepest) is the default; `michael`
   (CC-BY) is steadier on short lines; `marius` is CC0. `cosette` is non-commercial, and
   `omer`/`liat` have undocumented provenance.

@@ -54,7 +54,7 @@ def test_shipped_configs_use_the_cloned_pocket_voice():
     assert mac.pocket_model == "models/pocket-tts-english-ipa.onnx"
     assert orin.pocket_model == "/home/mirror/mirror-models/pocket-tts-english-ipa.onnx"
     assert mac.pocket_voice == orin.pocket_voice == "javert"
-    assert mac.pocket_threads == orin.pocket_threads == 2
+    assert mac.pocket_threads == orin.pocket_threads == 4
 
 
 def test_shipped_configs_set_the_lures():

@@ -415,6 +415,13 @@ class PocketTTS:
                 raise ValueError(f"unknown Pocket voice {voice!r}; built in: "
                                  f"{', '.join(self._model.voices())}")
             self._voice = voice
+        # Free what the model keeps but never uses here (~50 MB): the voice-cloning
+        # encoder (base64), and with a cloned voice the built-in voices too.
+        # Private attributes of pocket-tts-onnx (pinned in setup_orin.sh): best effort.
+        if hasattr(self._model, "_encoder_blob"):
+            self._model._encoder_blob = None
+        if voice_file and hasattr(self._model, "_voice_blobs"):
+            self._model._voice_blobs = {}
         self._g2p = g2p
         self._en_ipa = _EspeakIPA() if en_ipa == "espeak" else en_ipa
         self._seed = seed

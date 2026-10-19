@@ -42,3 +42,9 @@ def test_no_match(text):
 def test_hallucinations_ignored(text):
     assert is_hallucination(text)
     assert match_wake(text) is None
+
+
+def test_transliterated_on_the_wall_tail_is_stripped():
+    # live on the Mac: English "Mirror, mirror on the wall" came out in Hebrew letters
+    assert match_wake("מירר מירר על הוול").remainder == ""
+    assert match_wake("מירר מירר און דה וול, מה צופן העתיד?").remainder == "מה צופן העתיד"
