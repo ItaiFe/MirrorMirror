@@ -45,9 +45,12 @@ def test_tts_engine_defaults_to_piper_with_pocket_off():
     assert t.pocket_threads == 2
 
 
-def test_shipped_configs_keep_piper_and_name_the_pocket_model():
+def test_shipped_configs_name_the_pocket_model():
     mac, orin = load_config("config/mac.toml").tts, load_config("config/orin.toml").tts
-    assert mac.engine == orin.engine == "piper"
+    # the Mac speaks in the oracle's cloned voice; the Orin keeps Piper until Pocket
+    # is measured there
+    assert mac.engine == "pocket" and mac.pocket_voice_file == "models/voices/mirror.npy"
+    assert orin.engine == "piper"
     assert mac.pocket_model == "models/pocket-tts-english-ipa.onnx"
     assert orin.pocket_model == "/home/mirror/mirror-models/pocket-tts-english-ipa.onnx"
     assert mac.pocket_voice == orin.pocket_voice == "javert"
