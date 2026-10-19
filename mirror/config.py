@@ -89,6 +89,21 @@ class ConversationConfig:
 
 
 @dataclass
+class LlmConfig:
+    """Sampling sent with every llama-server request: a high temperature and
+    repetition penalties keep the oracle's answers from all sounding alike."""
+    temperature: float = 0.95
+    top_p: float = 0.95
+    min_p: float = 0.05
+    repeat_penalty: float = 1.12
+    presence_penalty: float = 0.4
+    frequency_penalty: float = 0.3
+
+    def sampling(self) -> dict:
+        return {f.name: getattr(self, f.name) for f in fields(self)}
+
+
+@dataclass
 class Config:
     audio: AudioConfig = field(default_factory=AudioConfig)
     servers: ServersConfig = field(default_factory=ServersConfig)
@@ -96,6 +111,7 @@ class Config:
     face: FaceConfig = field(default_factory=FaceConfig)
     lights: LightsConfig = field(default_factory=LightsConfig)
     conversation: ConversationConfig = field(default_factory=ConversationConfig)
+    llm: LlmConfig = field(default_factory=LlmConfig)
     models_dir: str = "models"  # silero_vad.onnx and the Hugging Face cache (hf/)
 
 

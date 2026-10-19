@@ -404,7 +404,8 @@ def run(cfg: Config, wav_path=None, config_path=None) -> int:
         world = load_world(resolve_repo_path(cfg.conversation.world_file, config_path))
         llm = LlamaServerLLM(cfg.servers.llm_url, cfg.servers.timeout_s,
                              cfg.conversation.max_reply_sentences,
-                             cfg.conversation.max_reply_chars, world=world)
+                             cfg.conversation.max_reply_chars, world=world,
+                             sampling=cfg.llm.sampling())
         tts, tts_rate, engine = load_tts(cfg.tts)  # after the env is set
         fillers = FillerBank(tts, FILLERS,
                              max_clip_s=FILLER_BUDGET_S if engine == "pocket" else None)

@@ -12,11 +12,26 @@ from typing import Callable, Iterator
 
 import requests
 
-from mirror.persona import system_prompt
+from mirror.config import LlmConfig
+from mirror.persona import Angle, angle_note, system_prompt
 
 log = logging.getLogger("mirror.llm")
 
-_STAGE_DIRECTIONS = re.compile(r"\*[^*]*\*|\[[^\]]*\]|\([^)]*\)")
+_STAGE_DIRECTIONS = re.compile(r"\*[^*]*\*|\[[^\]]*\]")
+_PARENTHETICAL = re.compile(r"\(([^()]*)\)")
+_SENTENCE_END = ".!?…"
+# words that make a parenthetical at the start or end of a sentence a stage
+# direction: "(laughs)", "(leans in)", "(בשקט)"; English words ending in -ly count too
+_DIRECTION_WORDS = frozenset({
+    "laughs", "laugh", "laughing", "chuckles", "chuckle", "chuckling", "giggles",
+    "smiles", "smile", "smiling", "grins", "grin", "grinning", "sighs", "sigh",
+    "winks", "wink", "winking", "nods", "nod", "pause", "pauses", "beat", "silence",
+    "whispers", "whispering", "leans", "leaning", "murmurs", "murmuring", "hums",
+    "shrugs", "beams", "ahem", "gasps", "laughter", "smirks",
+    "בשקט", "בלחש", "בלחישה", "בחיוך", "בקריצה", "בעדינות", "ברכות", "לוחש",
+    "מחייך", "צוחק", "מצחקק", "קורץ", "נאנח", "רוכן", "מהסס", "ממלמל", "הפסקה",
+    "שתיקה", "צחוק", "אנחה", "חיוך", "קריצה",
+})
 # A reply that opens with a label: the few-shot format ("תשובה: ...", "Answer - ...")
 # or a speaker name ("האורקל: ...", "Oracle: ...", "Mirror - ...")
 _ANSWER_LABEL = re.compile(
@@ -29,7 +44,7 @@ _JOINERS = {"‍", "︎", "️"}  # ZWJ and variation selectors
 # system prompt stays cached there between requests.
 LANG_SLOTS = {"en": 0, "he": 1}
 _MAX_TOKENS = 120
-_TEMPERATURE = 0.8
+_SAMPLING = LlmConfig().sampling()
 # Errors that mean the request or its streamed response failed (incl. bad JSON shape).
 _REQUEST_ERRORS = (requests.exceptions.RequestException, ValueError, KeyError,
                    IndexError, TypeError, AttributeError)
@@ -54,12 +69,46 @@ def _strip_emoji(text: str) -> str:
 
 def _clean(text: str) -> str:
     """Drop an "Answer:" label, stage directions (*smiles*, [winks], (sighs)), stray
-    *[]() marks and emoji; collapse whitespace."""
+    *[]() marks and emoji; collapse whitespace. A parenthetical that is not a stage
+    direction keeps its words: "it doesn't (hold) a pattern" -> "it doesn't hold a
+    pattern"."""
     text = _ANSWER_LABEL.sub("", text)
     text = _STAGE_DIRECTIONS.sub(" ", text)
+    text = _PARENTHETICAL.sub(_parenthetical, text)
     text = _STRAY_MARKS.sub("", text)
     text = _strip_emoji(text)
-    return " ".join(text.split())
+    text = " ".join(text.split())
+    return _SPACE_BEFORE_MARK.sub(r"\1", text)
+
+
+_SPACE_BEFORE_MARK = re.compile(r"(?<=\S) +([.,!?;:…])")
+
+
+def _parenthetical(m: "re.Match") -> str:
+    """A stage direction goes: a parenthetical that is a sentence of its own, or
+    one at the start or end of a sentence that reads like a direction. Any other
+    keeps its words, without the brackets."""
+    inner = m.group(1).strip()
+    before = m.string[:m.start()].rstrip()
+    after = m.string[m.end():].lstrip()
+    at_start = not before or before[-1] in _SENTENCE_END
+    at_end = not after or after[0] in _SENTENCE_END
+    if not inner or (at_start and (at_end or inner[-1] in _SENTENCE_END)):
+        return " "
+    if (at_start or at_end) and _looks_like_direction(inner, at_start):
+        return " "
+    return " " + inner + " "
+
+
+def _looks_like_direction(inner: str, at_start: bool) -> bool:
+    words = [w.strip(".,!?;:…") for w in inner.split()]
+    if not words or len(words) > 4:
+        return False
+    if any(w.lower() in _DIRECTION_WORDS or (w.isascii() and w.lower().endswith("ly"))
+           for w in words):
+        return True
+    # "(a long pause)" opening a sentence: English directions are lowercase
+    return at_start and inner[0].isascii() and inner[0].islower()
 
 
 def _cut(text: str, max_chars: int) -> str:
@@ -103,25 +152,29 @@ def trim_reply(text: str, max_sentences: int, max_chars: int) -> str:
 class LlamaServerLLM:
     def __init__(self, url: str, timeout_s: float,
                  max_sentences: int = 3, max_chars: int = 300, world: str = "",
-                 now: Callable[[], datetime] = datetime.now):
+                 now: Callable[[], datetime] = datetime.now,
+                 sampling: "dict | None" = None):
         self._endpoint = url.rstrip("/") + "/v1/chat/completions"
         self._timeout_s = timeout_s
         self._max_sentences = max_sentences
         self._max_chars = max_chars
         self._world = world
         self._now = now
+        self._sampling = dict(_SAMPLING if sampling is None else sampling)
 
     def _body(self, history: list[dict], user_text: str, lang: str,
-              max_tokens: int = _MAX_TOKENS) -> dict:
+              max_tokens: int = _MAX_TOKENS, angle: "Angle | None" = None) -> dict:
+        # the angle goes at the end of the user message, never into the system
+        # prompt: that stays byte-identical, so its cached prefix is reused
+        content = user_text if angle is None else f"{user_text} {angle_note(angle, lang)}"
         messages = ([{"role": "system",
                       "content": system_prompt(lang, self._world, self._now())}]
                     + list(history)
-                    + [{"role": "user", "content": user_text}])
+                    + [{"role": "user", "content": content}])
         # cache_prompt + a fixed slot per language: llama-server reuses the shared
         # prefix (persona + examples + world) between turns
-        return {"messages": messages, "max_tokens": max_tokens,
-                "temperature": _TEMPERATURE, "cache_prompt": True,
-                "id_slot": LANG_SLOTS[lang]}
+        return {"messages": messages, "max_tokens": max_tokens, **self._sampling,
+                "cache_prompt": True, "id_slot": LANG_SLOTS[lang]}
 
     def warm(self, lang: str) -> float | None:
         """Load the language's full system prompt into its slot's cache (one token
@@ -141,11 +194,12 @@ class LlamaServerLLM:
                  timings.get("prompt_n", "?"))
         return ms
 
-    def reply(self, history: list[dict], user_text: str, lang: str) -> str:
+    def reply(self, history: list[dict], user_text: str, lang: str,
+              angle: "Angle | None" = None) -> str:
         try:
             resp = requests.post(
                 self._endpoint,
-                json=self._body(history, user_text, lang),
+                json=self._body(history, user_text, lang, angle=angle),
                 timeout=self._timeout_s,
             )
             resp.raise_for_status()
@@ -162,16 +216,18 @@ class LlamaServerLLM:
         return text
 
     def reply_stream(self, history: list[dict], user_text: str, lang: str,
-                     cancel: threading.Event | None = None) -> Iterator[str]:
+                     cancel: threading.Event | None = None,
+                     angle: "Angle | None" = None) -> Iterator[str]:
         """Stream the reply, yielding complete, cleaned sentences as they arrive.
 
         At most max_sentences are yielded and max_chars in total (the last one cut
         with "…"). A failure before the first sentence raises LLMError; after it, the
         stream just ends (logged). Setting `cancel` ends the stream at the next
         streamed token; closing the iterator closes the connection either way.
+        An `angle` is appended to the user message as a short hidden instruction.
         """
         yielded, total = 0, 0
-        raw = self._raw_sentences(history, user_text, lang, cancel)
+        raw = self._raw_sentences(history, user_text, lang, cancel, angle)
         try:
             for sentence in raw:
                 sentence = _clean(sentence)
@@ -199,9 +255,9 @@ class LlamaServerLLM:
             raise LLMError("llama-server returned an empty reply")
 
     def _raw_sentences(self, history, user_text, lang,
-                       cancel: threading.Event | None) -> Iterator[str]:
+                       cancel: threading.Event | None, angle=None) -> Iterator[str]:
         """Uncleaned sentences from the SSE stream; the remainder is flushed at the end."""
-        body = dict(self._body(history, user_text, lang), stream=True)
+        body = dict(self._body(history, user_text, lang, angle=angle), stream=True)
         # llama-server's timings arrive in the final chunk, which a reply cut at
         # max_sentences never reads: log the client-side time to first token too
         t0, first = time.monotonic(), True

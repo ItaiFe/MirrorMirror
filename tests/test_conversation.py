@@ -30,6 +30,7 @@ class FakeLLM:
     def __init__(self, replies=("Thou art fairest.",)):
         self.replies = list(replies)
         self.calls = []
+        self.angles = []
 
     def reply(self, history, user_text, lang):
         self.calls.append((list(history), user_text, lang))
@@ -38,7 +39,8 @@ class FakeLLM:
             raise item
         return item
 
-    def reply_stream(self, history, user_text, lang, cancel=None):
+    def reply_stream(self, history, user_text, lang, cancel=None, angle=None):
+        self.angles.append(angle)
         yield from re.split(r"(?<=[.!?…])\s+", self.reply(history, user_text, lang))
 
 
@@ -373,7 +375,7 @@ class ScriptedLLM:
         self.calls = []
         self.finished = threading.Event()
 
-    def reply_stream(self, history, user_text, lang, cancel=None):
+    def reply_stream(self, history, user_text, lang, cancel=None, angle=None):
         self.calls.append((list(history), user_text, lang))
         try:
             for i, item in enumerate(self.items):
@@ -1116,3 +1118,63 @@ def test_lure_with_failing_sinks_still_returns_to_idle():
     clock.t += 180
     ctl.tick()
     assert ctl.state == State.IDLE and lure_plays(p["player"]) == 1
+
+
+# --- varied answers: an angle per answer ----------------------------------------------
+
+from mirror.conversation import ANGLE_MEMORY_S  # noqa: E402
+from mirror.persona import pick_angle  # noqa: E402
+
+
+def make_angled(script, seed=5, **kw):
+    parts = dict(stt=FakeSTT(script), llm=kw.pop("llm", None) or FakeLLM(),
+                 tts=FakeTTS(), player=FakePlayer(), lights=FakeLights(), face=FakeFace())
+    clock = Clock()
+    ctl = Controller(cfg=ConversationConfig(), clock=clock,
+                     angle_rng=_random.Random(seed), **parts, **kw)
+    return ctl, parts, clock
+
+
+def test_each_answer_gets_a_fresh_angle_respecting_the_windows():
+    script = [Transcript("mirror mirror who is fairest", "en")] + [
+        Transcript(f"question {i}", "en") for i in range(7)]
+    ctl, p, _ = make_angled(script)
+    for _ in script:
+        ctl.on_segment(SEG)
+    angles = p["llm"].angles
+    assert len(angles) == 8 and all(a is not None for a in angles)
+    expected, rng = [], _random.Random(5)
+    for _ in angles:
+        expected.append(pick_angle(rng, expected))
+    assert angles == expected  # deterministic, and the windows are kept
+    # the history keeps the question as asked, without the hidden instruction
+    assert [h["content"] for h in ctl._history if h["role"] == "user"][-1] == "question 6"
+
+
+def test_angles_remembered_across_conversations_for_a_while():
+    for gap, remembered in ((ANGLE_MEMORY_S - 1, True), (ANGLE_MEMORY_S + 1, False)):
+        ctl, p, clock = make_angled([Transcript("mirror mirror who is fairest", "en"),
+                                     Transcript("mirror mirror and now", "en")])
+        ctl.on_segment(SEG)
+        clock.t += 100
+        ctl.tick()  # listening times out: the conversation is over
+        assert ctl.state == State.IDLE and ctl._history == []
+        clock.t += gap - 100
+        ctl.on_segment(SEG)
+        rng = _random.Random(5)
+        first = pick_angle(rng, [])
+        assert p["llm"].angles == [first, pick_angle(rng, [first] if remembered else [])]
+
+
+def test_a_failing_angle_pick_still_answers(monkeypatch):
+    import mirror.conversation as conv
+
+    def boom(rng, recent):
+        raise RuntimeError("no angle")
+
+    monkeypatch.setattr(conv, "pick_angle", boom)
+    ctl, p, _ = make_angled([Transcript("mirror mirror who is fairest", "en")])
+    ctl.on_segment(SEG)
+    assert p["llm"].angles == [None]
+    assert p["tts"].calls == [("Thou art fairest.", "en")]
+    assert ctl.state == State.LISTENING

@@ -244,7 +244,7 @@ class FakeLLM:
     def warm(self, lang):
         return 0.0
 
-    def reply_stream(self, history, text, lang, cancel=None):
+    def reply_stream(self, history, text, lang, cancel=None, angle=None):
         time.sleep(1.2)  # the first sentence takes 1.2 s (real time: the timeline's clock)
         yield "I see a traveller."
         yield "Dust follows you."
@@ -686,7 +686,7 @@ def test_guarded_components_refuse_work_once_abandoned():
         def warm(self, lang):
             return 0.1
 
-        def reply_stream(self, history, text, lang, cancel=None):
+        def reply_stream(self, history, text, lang, cancel=None, angle=None):
             yield "one."
             abandoned.set()  # abandoned mid-reply
             yield "two."

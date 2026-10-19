@@ -23,7 +23,7 @@ import numpy as np
 
 from mirror.config import ConversationConfig
 from mirror.llm import LLMError, server_unreachable
-from mirror.persona import FALLBACK, SYSTEM_PROMPT
+from mirror.persona import FALLBACK, SYSTEM_PROMPT, pick_angle
 from mirror.states import State
 from mirror.stt import STTError
 from mirror.visemes import rms_shape
@@ -39,6 +39,10 @@ STALL_S = 0.6  # no next sentence this long after one finished -> show THINKING
 REWARM_AFTER_S = 600.0  # re-warm a language's prompt cache after this much idle
 REWARM_RETRY_S = 30.0  # after a failed re-warm, try again this much later
 REWARM_WAIT_S = 0.5  # how long an answer waits for an in-flight re-warm
+# recent answer angles are remembered this long, across conversations too, so the
+# next visitor does not hear the same kind of answer
+ANGLE_MEMORY_S = 900.0
+_ANGLES_KEPT = 8  # more than any no-repeat window
 _END = object()  # end of the sentence / clip stream
 
 
@@ -47,7 +51,8 @@ class Controller:
                  clock: Callable[[], float] = time.monotonic, fillers=None,
                  first_sentence_timeout_s: float = 20.0, lures=None,
                  wall_clock: Callable[[], datetime] = datetime.now,
-                 rng: Optional[random.Random] = None):
+                 rng: Optional[random.Random] = None,
+                 angle_rng: Optional[random.Random] = None):
         self._stt = stt
         self._llm = llm
         self._tts = tts
@@ -80,6 +85,9 @@ class Controller:
         self._lure_interval = (lo, hi)
         self._last_interaction = clock()
         self._next_lure_at = self._last_interaction + self._draw_lure_wait()
+        # answer angles: (time, Angle), oldest first; own rng, so lure draws stay put
+        self._angle_rng = angle_rng or random.Random()
+        self._recent_angles: list = []
 
     def mark_unwarmed(self, lang: str) -> None:
         """The language's prompt cache is cold: re-warm it at the next idle tick."""
@@ -229,12 +237,14 @@ class Controller:
         self._set_state(State.THINKING)
         self._last_llm[lang] = self._clock()
         self._wait_for_rewarm()
+        angle = self._next_angle()
         cancel = threading.Event()
         sentences: "queue.Queue" = queue.Queue()
         clips: "queue.Queue" = queue.Queue(maxsize=1)  # synthesize one sentence ahead
         workers = [
             threading.Thread(target=self._stream_worker, name="llm-stream", daemon=True,
-                             args=(list(self._history), text, lang, sentences, cancel)),
+                             args=(list(self._history), text, lang, sentences, cancel,
+                                   angle)),
             threading.Thread(target=self._synth_worker, name="tts-ahead", daemon=True,
                              args=(lang, sentences, clips, cancel)),
         ]
@@ -266,6 +276,21 @@ class Controller:
                               {"role": "assistant", "content": reply}])
         self._history = self._history[-_HISTORY_MAX:]
         self._listen(self._cfg.followup_s)
+
+    def _next_angle(self):
+        """A fresh angle for this answer, unlike the recent ones (forgotten after
+        ANGLE_MEMORY_S); None if picking fails. Never raises an Exception."""
+        try:
+            now = self._clock()
+            self._recent_angles = [(t, a) for t, a in self._recent_angles
+                                   if now - t <= ANGLE_MEMORY_S][-_ANGLES_KEPT:]
+            angle = pick_angle(self._angle_rng, [a for _, a in self._recent_angles])
+            self._recent_angles.append((now, angle))
+            log.info("angle: %s, %s", angle.mode, angle.imagery)
+            return angle
+        except Exception:
+            log.exception("choosing an answer angle failed")
+            return None
 
     def _wait_for_rewarm(self) -> None:
         """Let an in-flight re-warm finish (bounded) so the question does not queue
@@ -320,11 +345,12 @@ class Controller:
         return " ".join(spoken)
 
     def _stream_worker(self, history: list[dict], text: str, lang: str,
-                       out: "queue.Queue", cancel: threading.Event) -> None:
+                       out: "queue.Queue", cancel: threading.Event, angle=None) -> None:
         """LLM sentences -> out; then an exception (if the stream failed) and _END."""
         stream = None
         try:
-            stream = self._llm.reply_stream(history, text, lang, cancel=cancel)
+            stream = self._llm.reply_stream(history, text, lang, cancel=cancel,
+                                            angle=angle)
             for sentence in stream:
                 if cancel.is_set():
                     break

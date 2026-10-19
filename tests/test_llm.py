@@ -41,7 +41,7 @@ def test_request_shape():
     args, kwargs = post.call_args
     assert args[0] == "http://x:8080/v1/chat/completions"
     body = kwargs["json"]
-    assert body["max_tokens"] == 120 and body["temperature"] == 0.8
+    assert body["max_tokens"] == 120 and body["temperature"] == 0.95
     assert body["messages"][0] == {"role": "system",
                                    "content": system_prompt("he", "W", NOW)}
     assert body["messages"][1:3] == history
@@ -269,7 +269,8 @@ def test_stream_keeps_stage_directions_whole():
 
 def test_clean_strips_lone_brackets_and_stars():
     assert trim_reply("*The stars] know (yes.", 3, 300) == "The stars know yes."
-    assert trim_reply("(sighs) The stars (and the moon) know.", 3, 300) == "The stars know."
+    assert trim_reply("(sighs) The stars (and the moon) know.", 3, 300) == \
+        "The stars and the moon know."
 
 
 def test_clean_strips_copied_answer_label():
@@ -417,3 +418,166 @@ def test_hebrew_address_check_tool_reports_rate(capsys):
     out = capsys.readouterr().out
     assert "SINGULAR שלך" in out
     assert "singular address in 1/3 replies (33%)" in out
+
+
+# --- varied answers: angles, sampling, persona ---------------------------------------
+
+def test_pick_angle_is_deterministic_with_a_seeded_rng():
+    import random
+
+    from mirror.persona import IMAGERY, MODES, pick_angle
+
+    assert len(MODES) == 8 and len(IMAGERY) >= 25
+    a = [pick_angle(random.Random(3), []) for _ in range(2)]
+    assert a[0] == a[1]
+    assert a[0].mode in MODES and a[0].imagery in IMAGERY
+
+
+def test_pick_angle_respects_the_no_repeat_windows():
+    import random
+
+    from mirror.persona import IMAGERY, MODES, pick_angle
+
+    rng, recent = random.Random(11), []
+    for _ in range(200):
+        angle = pick_angle(rng, recent)
+        assert angle.mode not in [r.mode for r in recent[-3:]]
+        assert angle.imagery not in [r.imagery for r in recent[-5:]]
+        recent.append(angle)
+    assert {r.mode for r in recent} == set(MODES)  # every mode gets its turn
+    assert len({r.imagery for r in recent}) == len(IMAGERY)
+
+
+def test_angle_note_in_both_languages():
+    from mirror.persona import Angle, angle_note
+
+    en = angle_note(Angle("playful dare", "bicycles"), "en")
+    assert en == ("(Answer as a playful dare, using images of bicycles. "
+                  "Start by answering their actual question.)")
+    he = angle_note(Angle("playful dare", "bicycles"), "he")
+    assert he.startswith("(") and he.endswith(")") and "אופניים" in he
+    assert not re.search(r"[A-Za-z]", he)
+    assert angle_note(Angle("riddle", "fire"), "fr") == angle_note(Angle("riddle", "fire"), "en")
+
+
+def test_every_mode_and_image_world_has_hebrew():
+    from mirror.persona import IMAGERY, MODES, Angle, angle_note
+
+    for mode in MODES:
+        for imagery in IMAGERY:
+            assert not re.search(r"[A-Za-z]", angle_note(Angle(mode, imagery), "he"))
+
+
+def test_angle_goes_at_the_end_of_the_user_message_only():
+    from mirror.persona import Angle, angle_note
+
+    llm = LlamaServerLLM("http://x", 5, world="W", now=lambda: NOW)
+    bodies = []
+    for angle in (Angle("riddle", "fire"), Angle("tiny story", "kites")):
+        with patch("mirror.llm.requests.post", return_value=_sse("Hi.")) as post:
+            list(llm.reply_stream([{"role": "user", "content": "a"}], "hi", "he",
+                                  angle=angle))
+        bodies.append(post.call_args.kwargs["json"])
+        assert bodies[-1]["messages"][-1] == {
+            "role": "user", "content": "hi " + angle_note(angle, "he")}
+        assert bodies[-1]["messages"][1] == {"role": "user", "content": "a"}
+    # the system prompt is byte-identical, so the prompt cache stays warm
+    assert bodies[0]["messages"][0] == bodies[1]["messages"][0]
+    with patch("mirror.llm.requests.post", return_value=_ok("Hi.")) as post:
+        llm.reply([], "hi", "en", angle=Angle("riddle", "fire"))
+    assert post.call_args.kwargs["json"]["messages"][-1]["content"].startswith("hi (Answer as")
+    with patch("mirror.llm.requests.post", return_value=_ok("Hi.")) as post:
+        llm.reply([], "hi", "en")  # no angle: the question as asked
+    assert post.call_args.kwargs["json"]["messages"][-1]["content"] == "hi"
+
+
+SAMPLING = {"temperature": 0.95, "top_p": 0.95, "min_p": 0.05, "repeat_penalty": 1.12,
+            "presence_penalty": 0.4, "frequency_penalty": 0.3}
+
+
+def test_sampling_fields_in_every_request():
+    llm = LlamaServerLLM("http://x", 5)
+    with patch("mirror.llm.requests.post", return_value=_sse("Hi.")) as post:
+        list(llm.reply_stream([], "hi", "en"))
+    stream_body = post.call_args.kwargs["json"]
+    with patch("mirror.llm.requests.post", return_value=_ok("Hi.")) as post:
+        llm.reply([], "hi", "en")
+    for body in (stream_body, post.call_args.kwargs["json"]):
+        for k, v in SAMPLING.items():
+            assert body[k] == v, k
+    custom = LlamaServerLLM("http://x", 5, sampling=dict(SAMPLING, temperature=0.5))
+    with patch("mirror.llm.requests.post", return_value=_ok("Hi.")) as post:
+        custom.reply([], "hi", "en")
+    assert post.call_args.kwargs["json"]["temperature"] == 0.5
+
+
+@pytest.mark.parametrize("name", ["mac.toml", "orin.toml"])
+def test_sampling_is_set_in_both_configs(name):
+    import os
+
+    from mirror.config import load_config
+
+    cfg = load_config(os.path.join(os.path.dirname(__file__), os.pardir, "config", name))
+    assert cfg.llm.sampling() == SAMPLING
+    assert "[llm]" in _repo_file("config", name)
+
+
+def test_persona_drops_the_fixed_imagery_and_bans_stock_words():
+    en, he = SYSTEM_PROMPT["en"], SYSTEM_PROMPT["he"]
+    assert "stars, mists, threads" not in en
+    assert "כוכבים, ערפל, חוטים" not in he
+    assert "first sentence" in en and "previous replies" in en
+    for word in ("shimmer", "thread", "whisper", "ochre", "violet", "tapestry", "echo",
+                 "dust remembers"):
+        assert word in en
+    assert "במשפט הראשון" in he and "אוקר" in he and "נצנוץ" in he
+    assert "never cruel" in en and "one to three short" in en
+
+
+def test_hebrew_examples_avoid_the_overused_images():
+    from mirror.persona import HEBREW_EXAMPLES
+
+    for _, answer in HEBREW_EXAMPLES:
+        for stock in ("חוט", "כוכב", "ערפל", "לוחש", "נצנוץ", "השתקפות"):
+            assert stock not in answer, (stock, answer)
+
+
+# --- parentheses: stage directions go, mid-sentence words stay -------------------------
+
+@pytest.mark.parametrize("raw, clean", [
+    ("The desert doesn't (hold) a pattern. It simply (is).",
+     "The desert doesn't hold a pattern. It simply is."),
+    ("it doesn't (hold) a pattern.", "it doesn't hold a pattern."),
+    ("(softly) Look up.", "Look up."),
+    ("Look up. (pause)", "Look up."),
+    ("Look up (laughs).", "Look up."),
+    ("(leans in) The Temple knows.", "The Temple knows."),
+    ("Look up. (The mirror goes quiet.) Then go.", "Look up. Then go."),
+    ("The stars (and the moon) know.", "The stars and the moon know."),
+    ("המדבר לא (מחזיק) דפוס.", "המדבר לא מחזיק דפוס."),
+    ("(בשקט) הביטו למעלה.", "הביטו למעלה."),
+    ("הביטו למעלה. (הפסקה)", "הביטו למעלה."),
+    ("הוא פשוט (קיים).", "הוא פשוט קיים."),
+])
+def test_parentheses_keep_words_unless_a_stage_direction(raw, clean):
+    assert trim_reply(raw, 3, 300) == clean
+    with patch("mirror.llm.requests.post", return_value=_sse(*re.findall(r"\S+\s*", raw))):
+        out = list(LlamaServerLLM("http://x", 5).reply_stream([], "hi", "en"))
+    assert " ".join(out) == clean
+
+
+def test_tools_and_voice_send_the_configured_sampling():
+    import os
+    import sys
+
+    from mirror.config import Config, LlmConfig
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), os.pardir, "tools"))
+    import hebrew_address_check
+
+    cfg = Config(llm=LlmConfig(temperature=0.3))
+    llm = hebrew_address_check.build_llm(cfg, None, "http://x")
+    with patch("mirror.llm.requests.post", return_value=_ok("Hi.")) as post:
+        llm.reply([], "hi", "he")
+    assert post.call_args.kwargs["json"]["temperature"] == 0.3
+    for src in (_repo_file("mirror", "voice_main.py"), _repo_file("tools", "record_demo.py")):
+        assert "sampling=cfg.llm.sampling()" in src

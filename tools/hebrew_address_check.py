@@ -41,7 +41,8 @@ def build_llm(cfg, config_path, url=None) -> LlamaServerLLM:
     world = load_world(resolve_repo_path(cfg.conversation.world_file, config_path))
     return LlamaServerLLM(url or cfg.servers.llm_url, max(cfg.servers.timeout_s, 60),
                           max_sentences=cfg.conversation.max_reply_sentences,
-                          max_chars=cfg.conversation.max_reply_chars, world=world)
+                          max_chars=cfg.conversation.max_reply_chars, world=world,
+                          sampling=cfg.llm.sampling())
 
 
 def run_check(llm, n: int, show=print, budget_s=None, max_consecutive_errors=None,

@@ -898,9 +898,10 @@ class GuardedLLM:
         self._check()
         return self._llm.warm(lang)
 
-    def reply_stream(self, history, user_text, lang, cancel=None):
+    def reply_stream(self, history, user_text, lang, cancel=None, angle=None):
         self._check()
-        for sentence in self._llm.reply_stream(history, user_text, lang, cancel=cancel):
+        for sentence in self._llm.reply_stream(history, user_text, lang, cancel=cancel,
+                                               angle=angle):
             self._check()
             yield sentence
 

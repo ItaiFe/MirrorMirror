@@ -239,12 +239,13 @@ class TimedLLM:
     def warm(self, lang):
         return self._llm.warm(lang)
 
-    def reply_stream(self, history, user_text, lang, cancel=None):
+    def reply_stream(self, history, user_text, lang, cancel=None, angle=None):
         t0 = time.monotonic()
         call = {"user": user_text, "lang": lang, "first_sentence_s": None,
                 "sentences": [], "sentence_s": []}
         self.calls.append(call)
-        for s in self._llm.reply_stream(history, user_text, lang, cancel=cancel):
+        for s in self._llm.reply_stream(history, user_text, lang, cancel=cancel,
+                                         angle=angle):
             dt = time.monotonic() - t0
             if call["first_sentence_s"] is None:
                 call["first_sentence_s"] = round(dt, 3)
@@ -379,7 +380,8 @@ def cmd_record(args) -> None:
     world = load_world(resolve_repo_path(cfg.conversation.world_file, args.config))
     llm = TimedLLM(LlamaServerLLM(cfg.servers.llm_url, cfg.servers.timeout_s,
                                   cfg.conversation.max_reply_sentences,
-                                  cfg.conversation.max_reply_chars, world=world))
+                                  cfg.conversation.max_reply_chars, world=world,
+                                  sampling=cfg.llm.sampling()))
     router, _, engine = load_tts(cfg.tts)
     tts = TextTTS(router, texts, kind="filler")
     fillers = FillerBank(tts, FILLERS,
