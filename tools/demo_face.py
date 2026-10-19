@@ -8,7 +8,8 @@ For each language: synthesize an oracle line with TTSRouter.synth_visemes, then
 replay what the live system does frame by frame at 30 fps: the voice process
 sends (SPEAKING, mouth level, viseme) once per 20 ms hop (mouth_envelope, the
 viseme LEAD_S ahead), the face app keeps the latest message, smooths the mouth
-with step_mouth and feeds SpriteFace (floating per the config's face.float_*).
+with step_mouth and feeds SpriteFace (floating per the config's face.float_*, the
+background mist per face.mist_*).
 --idle s of idle before the line (default 1.5), idle after it until --seconds
 in all (default: --idle after it too), and one blink in the first idle stretch.
 --text replaces the language's oracle line.
@@ -35,6 +36,7 @@ from mirror.config import load_config, resolve_repo_path  # noqa: E402
 from mirror.conversation import HOP_S, LEAD_S  # noqa: E402
 from mirror.face.app import FPS, step_mouth  # noqa: E402
 from mirror.face.bank import load_bank  # noqa: E402
+from mirror.face.mist import MistParams  # noqa: E402
 from mirror.face.sprite import FloatParams, SpriteFace  # noqa: E402
 from mirror.states import State  # noqa: E402
 from mirror.visemes import rms_shape  # noqa: E402
@@ -82,11 +84,11 @@ def bus_message(t, speech_start, env, track):
 
 
 def render_demo(bank, samples, sr, track, idle_before=IDLE_S, idle_after=IDLE_S,
-                float_params=None):
+                float_params=None, mist_params=None):
     """Yield (frame_rgb, viseme, mouth, eye_name) for the whole timeline."""
     env = mouth_envelope(samples, sr, HOP_S)
     total = idle_before + len(samples) / sr + idle_after
-    face = SpriteFace(bank, float_params=float_params)
+    face = SpriteFace(bank, float_params=float_params, mist_params=mist_params)
     face.auto_blink = False
     mouth, dt = 0.0, 1.0 / FPS
     blinked = False
@@ -119,6 +121,7 @@ def main():
     bank = load_bank(args.bank or resolve_repo_path(cfg.face.bank, args.config))
     tts = make_tts(cfg, args.lang)
     float_params = FloatParams.from_config(cfg.face)
+    mist_params = MistParams.from_config(cfg.face)
     os.makedirs(args.out_dir, exist_ok=True)
     ffmpeg = shutil.which("ffmpeg")
     size = bank.size * SCALE
@@ -136,7 +139,7 @@ def main():
         writer = cv2.VideoWriter(mp4_path, cv2.VideoWriter_fourcc(*"mp4v"), FPS, (size, size))
         stills, best, run, prev = {}, {}, 0, None
         for i, (rgb, viseme, mouth, eye) in enumerate(render_demo(
-                bank, samples, sr, track, args.idle, after, float_params)):
+                bank, samples, sr, track, args.idle, after, float_params, mist_params)):
             big = cv2.resize(rgb, (size, size), interpolation=cv2.INTER_NEAREST)
             bgr = cv2.cvtColor(big, cv2.COLOR_RGB2BGR)
             writer.write(bgr)

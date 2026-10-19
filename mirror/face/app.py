@@ -54,11 +54,13 @@ def make_sprite_face(cfg: Config, config_path: str):
     if renderer != "sprite":
         raise ValueError(f"unknown face.renderer {renderer!r} (sprite | procedural)")
     from mirror.face.bank import load_bank
+    from mirror.face.mist import MistParams
     from mirror.face.sprite import FloatParams, SpriteFace
 
     bank_dir = resolve_repo_path(cfg.face.bank, config_path)
     log.info("face bank %s", bank_dir)
-    return SpriteFace(load_bank(bank_dir), float_params=FloatParams.from_config(cfg.face))
+    return SpriteFace(load_bank(bank_dir), float_params=FloatParams.from_config(cfg.face),
+                      mist_params=MistParams.from_config(cfg.face))
 
 
 def _open_display(cfg):

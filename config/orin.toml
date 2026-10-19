@@ -44,6 +44,10 @@ float_period_s = 6.5          # bob period; sway runs at x1.37, tilt at x0.83
 float_tilt_deg = 1.2          # +/- rotation
 float_scale = 0.93            # whole face shrunk about the centre so the motion never clips
 float_edge_feather_px = 6.0   # the outline fades into black over this many px
+mist = true                   # a faint old-gold mist drifting on the black behind the face
+mist_intensity = 0.10         # its brightest pixel, 0..1 of full brightness (keep low: the glass must still read as a mirror)
+mist_color = [150, 110, 45]   # RGB hue (antique gold); scaled so its brightest channel = mist_intensity
+mist_speed = 1.0              # drift rate (1.0: ~3 px/s, the wisps reshape over tens of seconds; 0 = still)
 
 [lights]
 kind = "wled"

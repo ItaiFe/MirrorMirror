@@ -104,3 +104,14 @@ def test_demo_face_uses_the_floating_face_params_from_config():
     bank_dir = os.path.join(os.path.dirname(__file__), os.pardir, cfg.face.bank)
     face = rd.make_face(load_bank(bank_dir), cfg)
     assert face.float_params == FloatParams.from_config(cfg.face)
+
+
+def test_demo_face_uses_the_mist_params_from_config():
+    from mirror.config import load_config
+    from mirror.face.bank import load_bank
+    from mirror.face.mist import MistParams
+
+    cfg = load_config(os.path.join(os.path.dirname(__file__), os.pardir, "config", "mac.toml"))
+    bank_dir = os.path.join(os.path.dirname(__file__), os.pardir, cfg.face.bank)
+    face = rd.make_face(load_bank(bank_dir), cfg)
+    assert face.mist_params == MistParams.from_config(cfg.face) and face.mist_params.enabled

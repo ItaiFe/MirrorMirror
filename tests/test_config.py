@@ -1,7 +1,7 @@
 import pytest
 
 
-from mirror.config import TtsConfig, load_config
+from mirror.config import FaceConfig, TtsConfig, load_config
 
 DEFAULT_G2P = "renikud"  # tts.he_g2p: Task 20 Step 5 (A/B listening set)
 
@@ -88,3 +88,31 @@ def test_voice_effect_is_read_from_toml(tmp_path):
 def test_voice_effect_out_of_range(kwargs):
     with pytest.raises(ValueError, match="voice_"):
         TtsConfig(**kwargs)
+
+
+def test_mist_defaults_off_and_is_on_in_the_shipped_configs():
+    f = FaceConfig()
+    assert f.mist is False and f.mist_intensity == 0.10
+    assert list(f.mist_color) == [150, 110, 45] and f.mist_speed == 1.0
+    for name in ("mac", "orin"):
+        face = load_config(f"config/{name}.toml").face
+        assert face.mist is True and face.mist_intensity == 0.10, name
+        assert list(face.mist_color) == [150, 110, 45] and face.mist_speed == 1.0, name
+
+
+def test_mist_is_read_from_toml(tmp_path):
+    p = tmp_path / "c.toml"
+    p.write_text("[face]\nmist = true\nmist_intensity = 0.08\nmist_color = [160, 120, 50]\n"
+                 "mist_speed = 0.5\n")
+    face = load_config(str(p)).face
+    assert face.mist is True and face.mist_intensity == 0.08
+    assert list(face.mist_color) == [160, 120, 50] and face.mist_speed == 0.5
+
+
+@pytest.mark.parametrize("kwargs", [{"mist_intensity": -0.1}, {"mist_intensity": 1.5},
+                                    {"mist_color": [150, 110]}, {"mist_color": [150, 110, 300]},
+                                    {"mist_color": [150, 110, 4.5]}, {"mist_color": "gold"},
+                                    {"mist_speed": -1.0}, {"mist_speed": 50.0}])
+def test_mist_out_of_range(kwargs):
+    with pytest.raises(ValueError, match="face.mist_"):
+        FaceConfig(**kwargs)

@@ -72,6 +72,21 @@ class FaceConfig:
     float_tilt_deg: float = 1.2  # +/- rotation
     float_scale: float = 0.93  # the whole face shrunk about the centre: margin for the motion
     float_edge_feather_px: float = 6.0  # the outline fades into black over this many px
+    # the background mist: a faint old-gold haze drifting on the black behind the face
+    mist: bool = False
+    mist_intensity: float = 0.10  # its brightest pixel, 0..1 of full brightness
+    mist_color: list = field(default_factory=lambda: [150, 110, 45])  # RGB hue
+    mist_speed: float = 1.0  # drift rate (1.0: ~3 px/s, the wisps reshape over tens of seconds)
+
+    def __post_init__(self):
+        if not 0.0 <= self.mist_intensity <= 1.0:
+            raise ValueError(f"face.mist_intensity must be 0..1, got {self.mist_intensity!r}")
+        c = self.mist_color
+        if (not isinstance(c, (list, tuple)) or len(c) != 3
+                or not all(isinstance(v, int) and 0 <= v <= 255 for v in c)):
+            raise ValueError(f"face.mist_color must be [r, g, b] in 0..255, got {c!r}")
+        if not 0.0 <= self.mist_speed <= 10.0:
+            raise ValueError(f"face.mist_speed must be 0..10, got {self.mist_speed!r}")
 
 
 @dataclass

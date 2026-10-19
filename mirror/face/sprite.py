@@ -35,6 +35,14 @@ image remap: grid(p) = A^-1(p) + D(A^-1(p)), where D is the summed warp
 displacement, resampled at A^-1(p) with one cheap 2-channel cv2.warpAffine
 (the fields are steep around the jaw, so D(p) would misplace the chin).
 With the float disabled, render() runs exactly the pre-float code path.
+
+Mist (MistParams, mirror/face/mist.py): a faint old-gold haze drifting on the
+black behind the face. It goes under the face as a plain "over" composite with
+the remapped (feathered) mask as the face's alpha: rgb = face * a + mist * (1 - a).
+The face stays fully opaque where a = 1 (its own dark pixels too: no mist inside
+the face), and the dissolving edge fades into the mist instead of into black.
+The mist runs on the face's own clock (update's dt), so offline renders match.
+With the mist disabled, render() runs exactly the pre-mist code path.
 """
 from __future__ import annotations
 
@@ -47,6 +55,7 @@ import cv2
 import numpy as np
 
 from mirror.face.bank import FaceBank
+from mirror.face.mist import Mist, MistParams
 from mirror.states import State
 
 SPRING_TAU_S = 0.120
@@ -110,7 +119,8 @@ def feather_mask(mask: np.ndarray, px: float) -> np.ndarray:
 
 class SpriteFace:
     def __init__(self, bank: FaceBank, rng: Optional[random.Random] = None,
-                 float_params: Optional[FloatParams] = None):
+                 float_params: Optional[FloatParams] = None,
+                 mist_params: Optional[MistParams] = None):
         self.bank = bank
         self.rng = rng or random.Random()
         self.float_params = float_params or FloatParams(enabled=False)
@@ -120,6 +130,8 @@ class SpriteFace:
         if self.float_params.enabled:
             self._mask = feather_mask(self._mask, self.float_params.edge_feather_px)
         self._float_amp = FLOAT_STATE_AMP[State.IDLE]
+        self.mist_params = mist_params or MistParams(enabled=False)
+        self._mist = Mist(self.mist_params, s) if self.mist_params.enabled else None
         self._loop = (np.concatenate(bank.idle_loops).astype(np.float32)
                       if bank.idle_loops else np.zeros((0, s, s, 3), np.float32))
         ys, xs = np.mgrid[0:s, 0:s].astype(np.float32)
@@ -329,6 +341,12 @@ class SpriteFace:
         out = cv2.remap(rgba, grid, None, cv2.INTER_LINEAR,
                         borderMode=cv2.BORDER_CONSTANT, borderValue=0)
         rgb = out[..., :3] * (out[..., 3:4] * (1.0 / 255.0))
+        if self._mist is not None:
+            # face over mist: the mist shows where the face's alpha is short of 1
+            level = self._mist.level(self._t)
+            under = level - level * (out[..., 3] * (1.0 / 255.0))
+            # under x the gold colour, (S, S, 1) -> (S, S, 3): cheaper than broadcasting
+            rgb += cv2.transform(under[..., None], self._mist.rgb.reshape(3, 1))
         return np.clip(rgb, 0, 255).astype(np.uint8)
 
     def _float_grid(self, weights: Dict[str, float]) -> np.ndarray:

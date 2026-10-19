@@ -47,3 +47,15 @@ def test_make_sprite_face_passes_float_config():
     cfg.face.float_amp_px = 3.0
     p = make_sprite_face(cfg, path).float_params
     assert p.enabled is False and p.amp_px == 3.0
+
+
+def test_make_sprite_face_passes_mist_config():
+    from mirror.config import load_config
+    from mirror.face.app import make_sprite_face
+
+    cfg = load_config("config/mac.toml")
+    path = os.path.abspath("config/mac.toml")
+    assert make_sprite_face(cfg, path).mist_params.enabled is True
+    cfg.face.mist = False
+    face = make_sprite_face(cfg, path)
+    assert face.mist_params.enabled is False and face._mist is None

@@ -563,13 +563,15 @@ def subtitles_at(doc, t):
 
 
 def make_face(bank, cfg):
-    """The app's SpriteFace (floating face from the config), with a fixed seed."""
+    """The app's SpriteFace (floating face and mist from the config), with a fixed seed."""
     import random
 
+    from mirror.face.mist import MistParams
     from mirror.face.sprite import FloatParams, SpriteFace
 
     return SpriteFace(bank, rng=random.Random(7),
-                      float_params=FloatParams.from_config(cfg.face))
+                      float_params=FloatParams.from_config(cfg.face),
+                      mist_params=MistParams.from_config(cfg.face))
 
 
 def cmd_render(args) -> None:
