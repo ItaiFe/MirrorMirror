@@ -693,3 +693,26 @@ Commit: `feat: idle lures — the oracle beckons passers-by`
 - **Tests:** angle choice is deterministic with a seeded rng and respects the no-repeat windows; the user message carries the angle while the system prompt is unchanged between two requests; sampling fields are present in the request body; the parentheses cases above.
 
 Commit: `feat: varied oracle answers (angles, sampling); keep mid-sentence parentheticals`
+
+---
+
+### Task 27: Floating face
+
+**Why (user request, 2026-10-19):** the face should look like a spirit hovering inside the glass, not a fixed sticker.
+
+**Files:** `mirror/face/sprite.py`, `mirror/config.py` + TOMLs (`face.float_*`), `tests/test_face_sprite.py`; regenerate the stub bank's mask edge feather only if needed (`tools/stub_bank.py`).
+
+- **Float transform**, applied as part of the single per-frame remap (fold it into the existing warp grid; no second remap):
+  - Vertical bob ±`float_amp_px` (default 5 px at 252), period `float_period_s` (default 6.5 s, a sine).
+  - Horizontal sway ±0.4×amp with a different period (×1.37, so the path never repeats exactly).
+  - Rotation ±`float_tilt_deg` (default 1.2°) on a third period (×0.83).
+  - Breathing scale stays as it is.
+  - All three sum smoothly; there are no jumps at state changes.
+- **Margin:** scale the whole composited face by `float_scale` (default 0.93) about the centre so the motion plus the jaw drop never clips the ears, crown or chin ornament at the 252 edge. Test: over a full period at the max jaw, no lit pixel lies within 2 px of the frame border.
+- **Dissolving edge:** feather the face mask's outer boundary more (`float_edge_feather_px`, default 6 px at 252) so the outline fades into black. Do it at render time (blur the mask once at load) rather than regenerating assets. Test: there's a monotonic alpha falloff across the boundary.
+- **State-aware amplitude:** IDLE 1.0×, LISTENING 0.7×, THINKING 0.8×, SPEAKING 0.45×, with spring-smoothed transitions using the existing 120 ms springs, or slower (600 ms) for the float.
+- **Config:** `face.float_enabled = true`, plus the defaults above in both TOMLs. Disabled means exactly today's behaviour (test: identical frames with float off).
+- **Performance:** median render time stays < 5 ms; extend the perf test.
+- **Deliverable:** after tests, render a 20 s demo (idle 8 s, then speaking with real TTS for ~8 s, then idle) with `tools/demo_face.py`, extended with a `--seconds/--idle` option if needed, to `scratchpad/float/float_demo.mp4` with audio, plus 3 stills.
+
+Commit: `feat: floating face (bob, sway, tilt, dissolving edge)`
