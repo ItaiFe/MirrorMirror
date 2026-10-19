@@ -57,14 +57,14 @@ Then say "Mirror, mirror on the wall, ..." or "מראה, מראה שעל הקי�
   (`tts.he_engine = "mms"`) add the `mms` extra: `-e '.[dev,hw,tts,mms]'` (pulls in torch).
 - The oracle's background story is `config/oracle_world.md`; edit it freely, it is read at start.
 
-### Optional voice: Pocket TTS (off by default)
+### The oracle's voice: Pocket TTS
 
 `tts.engine = "pocket"` swaps both voices for [Pocket TTS ONNX](https://huggingface.co/thewh1teagle/pocket-tts-onnx)
 (CC-BY-4.0: Kyutai's Pocket TTS, ONNX export and Hebrew IPA adapter by thewh1teagle).
-One model speaks English (as text) and Hebrew (as RenikudPlus IPA), in one voice. The
-default stays `"piper"` until Pocket is measured on the Orin (it is ~5x slower than
-Piper: RTF ~0.17-0.20 on an M2 at 2 threads) and someone has listened to it. If Pocket
-fails to load, the mirror logs a WARNING and uses the piper stack.
+One model speaks English (as text) and Hebrew (as RenikudPlus IPA), in one voice: the
+oracle's cloned voice (`pocket_voice_file`, below), on both the Mac and the Orin
+(~5x slower than Piper: RTF ~0.2-0.3 on an M2 at 2 threads; not yet measured on the
+Orin). If Pocket or the voice file fails to load, the mirror logs a WARNING and uses the piper stack.
 
 ```sh
 # not on PyPI and declares Python >= 3.13, but runs on 3.10/3.11 (uv can't override that):
@@ -399,7 +399,8 @@ last. The exit code is 0 when nothing FAILed.
 The 8 GB Orin is tight: with everything running, the estimate is about 7.1-7.4 GB of the
 7.62 GB `tegrastats` shows. That counts llama-server at about 3.8 GB (with the 8-bit KV
 cache and no host-RAM prompt cache, `-cram 0`), whisper-server at about 1 GB,
-mirror-voice at about 1 GB, mirror-face at about 0.2 GB, and JetPack plus GNOME at
+mirror-voice at about 1 GB (about 1.6 GB with the oracle's cloned Pocket voice, the
+default), mirror-face at about 0.2 GB, and JetPack plus GNOME at
 about 1.3 GB. There is no swap file, only zram. If memory runs out, the kernel kills a
 server mid-event, which costs a 10-20 s restart and fallback replies.
 **Measure memory first, before the rest of step 3.** Start everything, ask one English
@@ -488,6 +489,11 @@ e. **Advanced: a bare X session instead of GNOME** (estimated saving about 0.5-0
        /var/lib/AccountsService/users/$USER
    sudo reboot
    ```
+
+f. **Last resort: the Piper voices instead of the cloned voice** (estimated saving about
+   0.6 GB; the oracle then sounds like the stock English and Hebrew voices). In
+   `config/orin.toml` `[tts]` set `engine = "piper"`, then
+   `systemctl --user restart mirror-voice`.
 
 **7. Into the frame**
 - [ ] Mic at face height behind foam; the wake phrase works from where people will stand.
