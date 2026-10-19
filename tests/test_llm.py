@@ -141,9 +141,27 @@ def test_reply_stream_limits():
     with patch("mirror.llm.requests.post",
                return_value=_sse("Short one. " + "word " * 40 + "end. Never.")):
         out = list(LlamaServerLLM("http://x", 5, max_chars=60).reply_stream([], "hi", "en"))
-    assert out[0] == "Short one."
-    assert len(out) == 2 and out[1].endswith("…")
-    assert len(" ".join(out)) <= 60
+    # a sentence that does not fit is dropped, not spoken cut off
+    assert out == ["Short one."]
+    with patch("mirror.llm.requests.post", return_value=_sse("word " * 40 + "end.")):
+        out = list(LlamaServerLLM("http://x", 5, max_chars=60).reply_stream([], "hi", "en"))
+    assert len(out) == 1 and out[0].endswith("…") and len(out[0]) <= 60
+
+
+def test_reply_stream_drops_an_unfinished_last_sentence():
+    # max_tokens ends the reply mid-sentence: keep only the finished ones
+    with patch("mirror.llm.requests.post", return_value=_sse("One. Two and then the")):
+        out = list(LlamaServerLLM("http://x", 5).reply_stream([], "hi", "en"))
+    assert out == ["One."]
+    with patch("mirror.llm.requests.post", return_value=_sse("Only a fragment")):
+        out = list(LlamaServerLLM("http://x", 5).reply_stream([], "hi", "en"))
+    assert out == ["Only a fragment"]
+
+
+def test_trim_reply_drops_cut_and_unfinished_sentences():
+    assert trim_reply("One. " + "word " * 100 + "end.", 3, 300) == "One."
+    assert trim_reply("One. Two and then the", 3, 300) == "One."
+    assert trim_reply("אחת. שתיים ואז", 3, 300) == "אחת."
 
 
 def test_request_sends_cache_prompt():
@@ -532,6 +550,7 @@ def test_persona_drops_the_fixed_imagery_and_bans_stock_words():
         assert word in en
     assert "במשפט הראשון" in he and "אוקר" in he and "נצנוץ" in he
     assert "never cruel" in en and "one to three short" in en
+    assert "40 words" in en and "40 מילים" in he
 
 
 def test_hebrew_examples_avoid_the_overused_images():

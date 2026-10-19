@@ -162,15 +162,25 @@ def _clean_sentence(raw: str) -> str:
     return "" if _is_angle_echo(sentence) else sentence
 
 
+def _finished(sentence: str) -> bool:
+    """True if the sentence ends like one (not a fragment left by max_tokens)."""
+    return sentence.rstrip("\"'”’»)").endswith(tuple(_SENTENCE_END))
+
+
 def trim_reply(text: str, max_sentences: int, max_chars: int) -> str:
     # sentence by sentence, as the stream does: an unclosed (note stays one piece
     done, rest = _pop_sentences(text)
     text = " ".join(filter(None, map(_clean_sentence, done + [rest])))
-    sentences = _SENTENCE_SPLIT.split(text) if text else []
-    out = " ".join(sentences[:max_sentences])
-    if len(out) > max_chars:
-        out = _cut(out, max_chars)
-    return out
+    out: list[str] = []
+    for sentence in (_SENTENCE_SPLIT.split(text) if text else [])[:max_sentences]:
+        # past the first sentence, an unfinished one or one over the limit is dropped
+        # rather than spoken cut off
+        if out and (not _finished(sentence)
+                    or len(" ".join(out + [sentence])) > max_chars):
+            break
+        out.append(sentence)
+    joined = " ".join(out)
+    return _cut(joined, max_chars) if len(joined) > max_chars else joined
 
 
 class LlamaServerLLM:
@@ -244,8 +254,9 @@ class LlamaServerLLM:
                      angle: "Angle | None" = None) -> Iterator[str]:
         """Stream the reply, yielding complete, cleaned sentences as they arrive.
 
-        At most max_sentences are yielded and max_chars in total (the last one cut
-        with "…"). A failure before the first sentence raises LLMError; after it, the
+        At most max_sentences are yielded and max_chars in total. Past the first
+        sentence, one that would not fit or is unfinished ends the reply; only a first
+        sentence is ever cut (with "…"). A failure before the first sentence raises LLMError; after it, the
         stream just ends (logged). Setting `cancel` ends the stream at the next
         streamed token; closing the iterator closes the connection either way.
         An `angle` is appended to the user message as a short hidden instruction.
@@ -259,6 +270,10 @@ class LlamaServerLLM:
                     continue
                 room = self._max_chars - total - (1 if yielded else 0)
                 last = yielded + 1 >= self._max_sentences
+                # past the first sentence, an unfinished one (max_tokens) or one
+                # over the limit is dropped rather than spoken cut off
+                if yielded and (not _finished(sentence) or len(sentence) > room):
+                    return
                 if len(sentence) > room:
                     sentence, last = _cut(sentence, room), True
                     if not sentence:
