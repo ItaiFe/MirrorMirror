@@ -186,6 +186,9 @@ class Context:
         self.config_path = config_path
         self.args = args
         self.results: list[Result] = []
+        # set when an e2e turn was abandoned at its budget: its daemon thread may still
+        # be inside STT/LLM/TTS, so later LLM checks are skipped and main hard-exits
+        self.abandoned = threading.Event()
 
     def status_of(self, name: str) -> Optional[str]:
         for r in self.results:
@@ -858,27 +861,127 @@ def run_turn(controller, segmenter, vad, tl, player, stt, llm, wav: str, sr16: i
     return turn
 
 
+class GuardedSTT:
+    """STT wrapper that refuses new requests once `abandoned` is set."""
+
+    def __init__(self, stt, abandoned: threading.Event):
+        self._stt, self._abandoned = stt, abandoned
+
+    def __getattr__(self, name):  # .calls etc. of the wrapped TimedSTT
+        return getattr(self._stt, name)
+
+    def transcribe(self, samples, sr: int = 16000):
+        from mirror.stt import STTError
+
+        if self._abandoned.is_set():
+            raise STTError("bring-up turn abandoned")
+        return self._stt.transcribe(samples, sr)
+
+
+class GuardedLLM:
+    """LLM wrapper that refuses new requests, and stops a stream, once `abandoned`
+    is set (the stream's HTTP response is closed by the controller's worker)."""
+
+    def __init__(self, llm, abandoned: threading.Event):
+        self._llm, self._abandoned = llm, abandoned
+
+    def __getattr__(self, name):
+        return getattr(self._llm, name)
+
+    def _check(self):
+        from mirror.llm import LLMError
+
+        if self._abandoned.is_set():
+            raise LLMError("bring-up turn abandoned")
+
+    def warm(self, lang):
+        self._check()
+        return self._llm.warm(lang)
+
+    def reply_stream(self, history, user_text, lang, cancel=None):
+        self._check()
+        for sentence in self._llm.reply_stream(history, user_text, lang, cancel=cancel):
+            self._check()
+            yield sentence
+
+
+class GuardedTTS:
+    """TTS wrapper that refuses to synthesize once `abandoned` is set."""
+
+    def __init__(self, tts, abandoned: threading.Event):
+        self._tts, self._abandoned = tts, abandoned
+
+    def __getattr__(self, name):
+        return getattr(self._tts, name)
+
+    def _check(self):
+        if self._abandoned.is_set():
+            raise RuntimeError("bring-up turn abandoned")
+
+    def synth_visemes(self, text, lang):
+        self._check()
+        return self._tts.synth_visemes(text, lang)
+
+    def synth(self, text, lang):
+        self._check()
+        return self._tts.synth(text, lang)
+
+    def warmup(self):
+        self._check()
+        self._tts.warmup()
+
+
+def make_turn_fn(run: Callable, wav: str, abandoned: threading.Event, show=print) -> Callable:
+    """A run_turns fn for run(wav): does nothing once abandoned, and never prints
+    after it (an abandoned turn that finishes late stays silent)."""
+    def fn():
+        if abandoned.is_set():
+            return {}
+        turn = run(wav)
+        if not abandoned.is_set():
+            show(f"       heard: {turn.get('heard')!r}\n       reply: {turn.get('reply')!r}")
+        return turn
+    return fn
+
+
+def warmup_failure(names, done: bool, unwarmed, exc) -> Optional[list]:
+    """FAIL results for every e2e turn if the LLM warmup didn't finish, raised, or
+    failed for MAX_LLM_ERRORS languages; None to go ahead."""
+    if not done:
+        why = "the llama-server warmup did not finish within the e2e budget"
+    elif exc is not None:
+        why = f"warmup crashed: {type(exc).__name__}: {exc}"
+    elif len(unwarmed or ()) >= MAX_LLM_ERRORS:
+        why = f"{len(unwarmed)} LLM warmup errors in a row (llama-server stalled?)"
+    else:
+        return None
+    return [Result(n, FAIL, f"not run: {why}", server_fix()) for n in names]
+
+
 def run_turns(specs: list, budget_s: float, max_llm_errors: int = MAX_LLM_ERRORS,
-              clock: Callable[[], float] = time.monotonic) -> list[Result]:
+              clock: Callable[[], float] = time.monotonic,
+              abandoned: Optional[threading.Event] = None) -> list[Result]:
     """specs: (name, lang, fn) with fn() -> a run_turn dict. Each turn runs on a
-    budgeted thread inside one shared budget; a stalled turn is abandoned and every
-    later one FAILs as not run, and so do the rest after max_llm_errors LLM errors
-    in a row."""
+    budgeted thread inside one shared budget; a stalled turn is abandoned (and
+    `abandoned` set, so its guarded components stop), and every later one FAILs as
+    not run, and so do the rest after max_llm_errors LLM errors in a row."""
+    abandoned = abandoned if abandoned is not None else threading.Event()
     deadline = clock() + budget_s
     results: list[Result] = []
     stop_reason = None
     llm_errors = 0
     for name, lang, fn in specs:
         if stop_reason is None and clock() >= deadline:
-            stop_reason = f"the e2e budget of {budget_s:g} s is used up"
+            stop_reason = f"the e2e budget of {budget_s:.0f} s is used up"
         if stop_reason is not None:
             results.append(Result(name, FAIL, f"not run: {stop_reason}", server_fix()))
             continue
         done, turn, exc = call_with_budget(fn, deadline - clock())
         if not done:
-            stop_reason = f"the e2e budget of {budget_s:g} s is used up"
+            abandoned.set()
+            stop_reason = f"the e2e budget of {budget_s:.0f} s is used up"
             results.append(Result(name, FAIL, f"no answer within the e2e budget of "
-                                  f"{budget_s:g} s (a stalled server?); abandoned",
+                                  f"{budget_s:.0f} s (a stalled server?); abandoned",
                                   server_fix()))
             continue
         if exc is not None:
@@ -919,40 +1022,42 @@ def check_e2e(ctx: Context) -> list[Result]:
     face = rd.TimelineFace(tl)
     vad = SileroVad(os.path.join(os.path.abspath(cfg.models_dir), "silero_vad.onnx"))
     segmenter = Segmenter(vad, frame_samples=CHUNK, sample_rate=cfg.audio.sample_rate)
-    stt = rd.TimedSTT(WhisperServerSTT(cfg.servers.stt_url, cfg.servers.timeout_s))
-    llm = rd.TimedLLM(build_llm(cfg, ctx.config_path))
-    tts = rd.TextTTS(router, texts, kind="filler")
+    stop = ctx.abandoned
+    stt = GuardedSTT(rd.TimedSTT(WhisperServerSTT(cfg.servers.stt_url, cfg.servers.timeout_s)),
+                     stop)
+    llm = GuardedLLM(rd.TimedLLM(build_llm(cfg, ctx.config_path)), stop)
+    text_tts = rd.TextTTS(router, texts, kind="filler")
+    tts = GuardedTTS(text_tts, stop)
     fillers = FillerBank(tts, FILLERS,
                          max_clip_s=FILLER_BUDGET_S if engine == "pocket" else None)
     fillers.prepare()
-    tts.kind = "reply"
+    text_tts.kind = "reply"  # on the wrapped TextTTS, not on the guard
     t0 = time.monotonic()  # the budget covers the warmups and both turns
-    done, unwarmed, _exc = call_with_budget(lambda: warm_llm(llm), E2E_BUDGET_S)
-    if not done or len(unwarmed or ()) >= MAX_LLM_ERRORS:
-        why = ("the llama-server warmup did not finish within the e2e budget" if not done
-               else f"{len(unwarmed)} LLM warmup errors in a row (llama-server stalled?)")
-        return [Result(n, FAIL, f"not run: {why}", server_fix()) for n in names]
+    done, unwarmed, exc = call_with_budget(lambda: warm_llm(llm), E2E_BUDGET_S)
+    if not done:
+        stop.set()  # the warmup thread may still be talking to llama-server
+    failed = warmup_failure(names, done, unwarmed, exc)
+    if failed:
+        return failed
 
-    def turn_fn(wav):
-        def fn():
-            controller = Controller(stt, llm, tts, player, rd._NullLights(), face,
-                                    cfg.conversation, clock=tl.now, fillers=fillers,
-                                    first_sentence_timeout_s=cfg.servers.timeout_s)
-            for u in unwarmed:
-                controller.mark_unwarmed(u)
-            try:
-                turn = run_turn(controller, segmenter, vad, tl, player, stt, llm, wav,
-                                cfg.audio.sample_rate)
-            finally:
-                controller.close()
-            print(f"       heard: {turn.get('heard')!r}\n       reply: {turn.get('reply')!r}",
-                  flush=True)
-            return turn
-        return fn
+    def run(wav):
+        controller = Controller(stt, llm, tts, player, rd._NullLights(), face,
+                                cfg.conversation, clock=tl.now, fillers=fillers,
+                                first_sentence_timeout_s=cfg.servers.timeout_s)
+        for u in unwarmed:
+            controller.mark_unwarmed(u)
+        try:
+            return run_turn(controller, segmenter, vad, tl, player, stt, llm, wav,
+                            cfg.audio.sample_rate)
+        finally:
+            controller.close()
 
-    specs = [(name, wavs[key][0], turn_fn(wavs[key][2]))
+    def show(text):
+        print(text, flush=True)
+
+    specs = [(name, wavs[key][0], make_turn_fn(run, wavs[key][2], stop, show))
              for key, name in zip(E2E_QUESTIONS, names)]
-    return run_turns(specs, E2E_BUDGET_S - (time.monotonic() - t0))
+    return run_turns(specs, E2E_BUDGET_S - (time.monotonic() - t0), abandoned=stop)
 
 
 # --------------------------------------------------------------------------
@@ -980,6 +1085,9 @@ def hebrew_result(res: dict) -> Result:
 def check_hebrew(ctx: Context) -> Result:
     if ctx.status_of("llm server") != PASS:
         return Result("hebrew address", FAIL, "llama-server is not up", server_fix())
+    if ctx.abandoned.is_set():
+        return Result("hebrew address", WARN,
+                      "skipped: an end-to-end turn was abandoned (LLM busy)", server_fix())
     from hebrew_address_check import build_llm, run_check
 
     res = run_check(build_llm(ctx.cfg, ctx.config_path), HEBREW_N, show=lambda _s: None,
@@ -990,6 +1098,17 @@ def check_hebrew(ctx: Context) -> Result:
 # --------------------------------------------------------------------------
 # main
 # --------------------------------------------------------------------------
+def finish(code: int, abandoned: threading.Event, _exit: Callable = os._exit) -> int:
+    """The exit code; if a budgeted thread was abandoned (it may sit in native code:
+    an HTTP read, onnxruntime), flush and leave with os._exit instead of a normal
+    interpreter shutdown, which could hang on or abort in that thread."""
+    if abandoned.is_set():
+        sys.stdout.flush()
+        sys.stderr.flush()
+        _exit(code)
+    return code
+
+
 def build_checks(args) -> list[Check]:
     quick = "--quick" if args.quick else None
     return [
@@ -1050,7 +1169,7 @@ def main(argv=None) -> int:
     if args.json:
         write_json(args.json, results, meta)
         print(f"report: {args.json}")
-    return exit_code(results)
+    return finish(exit_code(results), ctx.abandoned)
 
 
 if __name__ == "__main__":

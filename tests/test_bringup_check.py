@@ -644,3 +644,119 @@ def test_default_wav_cache_is_in_the_repo_and_gitignored():
     assert bc.DEFAULT_CACHE == os.path.join(bc.REPO, ".cache", "bringup")
     with open(os.path.join(bc.REPO, ".gitignore"), encoding="utf-8") as f:
         assert ".cache/" in f.read().split()
+
+
+# --- re-review: abandoned turns -----------------------------------------------------------
+import threading  # noqa: E402
+
+
+def test_run_turns_marks_a_stalled_turn_abandoned():
+    abandoned = threading.Event()
+    release = threading.Event()
+    seen = {}
+
+    def stalled():
+        release.wait(5)
+        seen["abandoned_after_release"] = abandoned.is_set()
+        return {}
+
+    res = bc.run_turns([("e2e English", "en", stalled)], budget_s=0.3, abandoned=abandoned)
+    assert res[0].status == "FAIL" and abandoned.is_set()
+    release.set()
+    time.sleep(0.2)
+    assert seen["abandoned_after_release"] is True
+
+
+def test_run_turns_leaves_abandoned_clear_when_all_finish():
+    abandoned = threading.Event()
+    ok = {"heard": "mirror mirror", "wake": True, "lang": "en", "first_sentence_s": 1.0}
+    bc.run_turns([("t", "en", lambda: ok)], budget_s=5.0, abandoned=abandoned)
+    assert not abandoned.is_set()
+
+
+def test_guarded_components_refuse_work_once_abandoned():
+    from mirror.llm import LLMError
+    from mirror.stt import STTError
+
+    abandoned = threading.Event()
+
+    class LLM:
+        calls = ["x"]
+
+        def warm(self, lang):
+            return 0.1
+
+        def reply_stream(self, history, text, lang, cancel=None):
+            yield "one."
+            abandoned.set()  # abandoned mid-reply
+            yield "two."
+
+    stt = bc.GuardedSTT(FakeSTT(), abandoned)
+    llm = bc.GuardedLLM(LLM(), abandoned)
+    tts = bc.GuardedTTS(FakeTTS(), abandoned)
+    assert stt.transcribe(np.zeros(10)).lang == "en"
+    assert llm.calls == ["x"]  # pass-through attributes (TimedLLM.calls)
+    assert llm.warm("en") == 0.1
+    assert tts.synth_visemes("hi", "en")[1] == 1000
+    got = []
+    with pytest.raises(LLMError):
+        for s in llm.reply_stream([], "q", "en"):
+            got.append(s)
+    assert got == ["one."]  # stopped before the second sentence
+    with pytest.raises(STTError):
+        stt.transcribe(np.zeros(10))
+    with pytest.raises(LLMError):
+        llm.warm("he")
+    with pytest.raises(RuntimeError):
+        tts.synth_visemes("hi", "en")
+
+
+def test_turn_fn_does_nothing_and_prints_nothing_once_abandoned():
+    abandoned = threading.Event()
+    shown, ran = [], []
+
+    def run(wav):
+        ran.append(wav)
+        abandoned.set()  # the budget ran out while this turn was busy
+        return {"heard": "h", "reply": "r"}
+
+    fn = bc.make_turn_fn(run, "a.wav", abandoned, show=shown.append)
+    fn()
+    assert ran == ["a.wav"] and shown == []  # finished late: no print
+    fn()
+    assert ran == ["a.wav"]  # never starts once abandoned
+    abandoned.clear()
+    bc.make_turn_fn(lambda wav: {"heard": "h", "reply": "r"}, "b.wav", abandoned,
+                    show=shown.append)()
+    assert len(shown) == 1 and "'h'" in shown[0]
+
+
+def test_hebrew_is_skipped_after_an_abandoned_turn():
+    ctx = bc.Context(cfg=Config())
+    ctx.results = [bc.Result("llm server", bc.PASS, "")]
+    ctx.abandoned.set()
+    r = bc.check_hebrew(ctx)
+    assert r.status == "WARN"
+    assert r.reason == "skipped: an end-to-end turn was abandoned (LLM busy)"
+
+
+def test_finish_hard_exits_only_when_a_thread_was_abandoned():
+    exits = []
+    abandoned = threading.Event()
+    assert bc.finish(1, abandoned, _exit=exits.append) == 1 and exits == []
+    abandoned.set()
+    bc.finish(0, abandoned, _exit=exits.append)
+    assert exits == [0]
+
+
+def test_warmup_outcome():
+    names = ("e2e English", "e2e Hebrew")
+    assert bc.warmup_failure(names, True, [], None) is None
+    assert bc.warmup_failure(names, True, ["he"], None) is None  # one cold slot is fine
+    res = bc.warmup_failure(names, True, None, RuntimeError("boom"))
+    assert [r.status for r in res] == ["FAIL", "FAIL"]
+    assert "warmup crashed: RuntimeError: boom" in res[0].reason
+    res = bc.warmup_failure(names, True, ["en", "he"], None)
+    assert "2 LLM warmup errors" in res[0].reason
+    res = bc.warmup_failure(names, False, None, None)
+    assert "did not finish" in res[0].reason
