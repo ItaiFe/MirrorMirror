@@ -96,7 +96,7 @@ def test_mist_defaults_off_and_is_on_in_the_shipped_configs():
     assert list(f.mist_color) == [150, 110, 45] and f.mist_speed == 1.0
     for name in ("mac", "orin"):
         face = load_config(f"config/{name}.toml").face
-        assert face.mist is True and face.mist_intensity == 0.10, name
+        assert face.mist is True and face.mist_intensity == 0.25, name
         assert list(face.mist_color) == [150, 110, 45] and face.mist_speed == 1.0, name
 
 

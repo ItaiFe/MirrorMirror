@@ -167,4 +167,4 @@ def test_mist_params_from_config():
 
     for name in ("mac.toml", "orin.toml"):
         p = MistParams.from_config(load_config(str(ROOT / "config" / name)).face)
-        assert p == MistParams(enabled=True, intensity=0.10, color=(150, 110, 45), speed=1.0)
+        assert p == MistParams(enabled=True, intensity=0.25, color=(150, 110, 45), speed=1.0)
