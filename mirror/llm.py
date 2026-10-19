@@ -21,8 +21,11 @@ _STAGE_DIRECTIONS = re.compile(r"\*[^*]*\*|\[[^\]]*\]")
 _PARENTHETICAL = re.compile(r"\(([^()]*)\)")
 _SENTENCE_END = ".!?…"
 # words that make a parenthetical at the start or end of a sentence a stage
-# direction: "(laughs)", "(leans in)", "(בשקט)"; English words ending in -ly count too
+# direction: "(laughs)", "(leans in)", "(בשקט)". Only these: "(July)", "(only)" stay.
 _DIRECTION_WORDS = frozenset({
+    "softly", "quietly", "slowly", "gently", "warmly", "sadly", "tenderly",
+    "playfully", "mysteriously", "dramatically", "thoughtfully", "solemnly",
+    "knowingly", "wistfully", "lightly", "suddenly", "mischievously",
     "laughs", "laugh", "laughing", "chuckles", "chuckle", "chuckling", "giggles",
     "smiles", "smile", "smiling", "grins", "grin", "grinning", "sighs", "sigh",
     "winks", "wink", "winking", "nods", "nod", "pause", "pauses", "beat", "silence",
@@ -95,20 +98,30 @@ def _parenthetical(m: "re.Match") -> str:
     at_end = not after or after[0] in _SENTENCE_END
     if not inner or (at_start and (at_end or inner[-1] in _SENTENCE_END)):
         return " "
-    if (at_start or at_end) and _looks_like_direction(inner, at_start):
+    if (at_start or at_end) and _looks_like_direction(inner):
         return " "
     return " " + inner + " "
 
 
-def _looks_like_direction(inner: str, at_start: bool) -> bool:
+def _looks_like_direction(inner: str) -> bool:
     words = [w.strip(".,!?;:…") for w in inner.split()]
     if not words or len(words) > 4:
         return False
-    if any(w.lower() in _DIRECTION_WORDS or (w.isascii() and w.lower().endswith("ly"))
-           for w in words):
-        return True
-    # "(a long pause)" opening a sentence: English directions are lowercase
-    return at_start and inner[0].isascii() and inner[0].islower()
+    return any(w.lower() in _DIRECTION_WORDS for w in words)
+
+
+# The hidden angle note (persona.angle_note) echoed back, whole, cut short by
+# max_tokens or without its brackets: never spoken.
+_ECHO_START = ("(answer", "answer as", "(ענה", "ענה ב")
+_ECHO_ANYWHERE = ("answering their actual question", "פתח בתשובה לשאלה")
+
+
+_BRACKETED_ECHO = re.compile(r"\(\s*(?:answer|ענה)\b[^()]*\)", re.IGNORECASE)
+
+
+def _is_angle_echo(sentence: str) -> bool:
+    s = sentence.lstrip(" \t\n*[").lower()
+    return s.startswith(_ECHO_START) or any(e in s for e in _ECHO_ANYWHERE)
 
 
 def _cut(text: str, max_chars: int) -> str:
@@ -140,8 +153,19 @@ def _pop_sentences(buf: str) -> tuple[list[str], str]:
     return done, buf[start:]
 
 
+def _clean_sentence(raw: str) -> str:
+    """A cleaned sentence, or "" if it is an echo of the angle note."""
+    raw = _BRACKETED_ECHO.sub(" ", raw)  # a whole note, with what follows it
+    if _is_angle_echo(raw):
+        return ""
+    sentence = _clean(raw)
+    return "" if _is_angle_echo(sentence) else sentence
+
+
 def trim_reply(text: str, max_sentences: int, max_chars: int) -> str:
-    text = _clean(text)
+    # sentence by sentence, as the stream does: an unclosed (note stays one piece
+    done, rest = _pop_sentences(text)
+    text = " ".join(filter(None, map(_clean_sentence, done + [rest])))
     sentences = _SENTENCE_SPLIT.split(text) if text else []
     out = " ".join(sentences[:max_sentences])
     if len(out) > max_chars:
@@ -230,7 +254,7 @@ class LlamaServerLLM:
         raw = self._raw_sentences(history, user_text, lang, cancel, angle)
         try:
             for sentence in raw:
-                sentence = _clean(sentence)
+                sentence = _clean_sentence(sentence)
                 if not sentence:
                     continue
                 room = self._max_chars - total - (1 if yielded else 0)

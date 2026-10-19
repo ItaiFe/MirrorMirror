@@ -581,3 +581,52 @@ def test_tools_and_voice_send_the_configured_sampling():
     assert post.call_args.kwargs["json"]["temperature"] == 0.3
     for src in (_repo_file("mirror", "voice_main.py"), _repo_file("tools", "record_demo.py")):
         assert "sampling=cfg.llm.sampling()" in src
+
+
+# --- the hidden angle note is never spoken ---------------------------------------------
+
+_ECHOES = [
+    "(Answer as a playful dare, using images of bicycles. "
+    "Start by answering their actual question.)",
+    "Answer as a playful dare, using images of bicycles.",
+    "Start by answering their actual question.",
+    "start by ANSWERING THEIR ACTUAL QUESTION, then the rest.",
+    "(Answer as a riddle, using images of",  # cut by max_tokens
+    "(ענה באתגר שובב, בדימויים של אופניים. פתח בתשובה לשאלה עצמה.)",
+    "ענה באתגר שובב, בדימויים של אופניים.",
+    "פתח בתשובה לשאלה עצמה.",
+    "(ענה בחידה, בדימויים של",  # cut by max_tokens
+]
+
+
+@pytest.mark.parametrize("echo", _ECHOES)
+def test_angle_note_echo_is_dropped(echo):
+    for raw, clean in ((f"Ride on. {echo}", "Ride on."), (f"{echo} Ride on.", "Ride on."),
+                       (f"שאלו את הרוח. {echo}", "שאלו את הרוח.")):
+        if echo.endswith("של") or echo.endswith("of"):
+            if not raw.endswith(echo):
+                continue  # a truncated note only ever ends the reply
+        assert trim_reply(raw, 3, 300) == clean, raw
+        with patch("mirror.llm.requests.post",
+                   return_value=_sse(*re.findall(r"\S+\s*", raw))):
+            out = list(LlamaServerLLM("http://x", 5).reply_stream([], "hi", "en"))
+        assert out == [clean], raw
+
+
+def test_only_an_echo_is_an_empty_reply():
+    with patch("mirror.llm.requests.post", return_value=_ok(_ECHOES[0])):
+        with pytest.raises(LLMError):
+            LlamaServerLLM("http://x", 1).reply([], "hi", "en")
+
+
+@pytest.mark.parametrize("raw, clean", [
+    ("We meet in (July).", "We meet in July."),
+    ("(Italy) waits for you.", "Italy waits for you."),
+    ("It is yours (only).", "It is yours only."),
+    ("(family) comes first.", "family comes first."),
+    ("(quietly) Look up.", "Look up."),
+    ("Look up (slowly).", "Look up."),
+    ("(leans in) Look up.", "Look up."),
+])
+def test_only_listed_direction_words_make_a_stage_direction(raw, clean):
+    assert trim_reply(raw, 3, 300) == clean
