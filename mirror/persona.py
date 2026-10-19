@@ -170,7 +170,8 @@ IMAGERY_WINDOW = 5  # nor an image world within this many
 _ANGLE_NOTE = {
     "en": "(Answer as {mode}, using images of {imagery}. "
           "Start by answering their actual question.)",
-    "he": "(ענה {mode}, בדימויים של {imagery}. פתח בתשובה לשאלה עצמה.)",
+    "he": "(ענה {mode}, בדימויים של {imagery}. פתח בתשובה לשאלה עצמה, "
+          "ופנה אליהם בלשון רבים.)",
 }
 
 

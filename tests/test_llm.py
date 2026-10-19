@@ -665,3 +665,15 @@ def test_crude_sentences_are_dropped():
                return_value=_sse("Fine words. ", "Then shit happens. ", "More.")):
         out = list(LlamaServerLLM("http://x", 5).reply_stream([], "hi", "en"))
     assert out == ["Fine words.", "More."]
+
+
+def test_an_echoed_question_is_dropped():
+    # the few-shot format ("שאלה: ...") makes the model repeat the question first
+    assert trim_reply("שאלה: אתה באמת יודע הכל? אני רואה מפתחות רבים.", 3, 300) == \
+        "אני רואה מפתחות רבים."
+    assert trim_reply("Question: do you know everything? I see many keys.", 3, 300) == \
+        "I see many keys."
+    with patch("mirror.llm.requests.post",
+               return_value=_sse("שאלה: אתה באמת", " יודע הכל? אני רואה", " מפתחות.")):
+        out = list(LlamaServerLLM("http://x", 5).reply_stream([], "hi", "he"))
+    assert out == ["אני רואה מפתחות."]

@@ -112,8 +112,11 @@ def _looks_like_direction(inner: str) -> bool:
 
 # The hidden angle note (persona.angle_note) echoed back, whole, cut short by
 # max_tokens or without its brackets: never spoken.
-_ECHO_START = ("(answer", "answer as", "(ענה", "ענה ב")
-_ECHO_ANYWHERE = ("answering their actual question", "פתח בתשובה לשאלה")
+_ECHO_START = ("(answer", "answer as", "(ענה", "ענה ב",
+               # the visitor's question repeated in the few-shot format
+               "שאלה:", "question:")
+_ECHO_ANYWHERE = ("answering their actual question", "פתח בתשובה לשאלה",
+                  "פנה אליהם בלשון רבים")
 
 
 _BRACKETED_ECHO = re.compile(r"\(\s*(?:answer|ענה)\b[^()]*\)", re.IGNORECASE)
