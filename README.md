@@ -16,7 +16,8 @@ starts at boot and restarts itself if it crashes:
 Contents: [Mac quickstart](#mac-quickstart) · [Orin deploy](#orin-deploy) ·
 [LED panels (NovaLCT)](#led-panels-one-time-novalct-setup) ·
 [Frame lights (WLED)](#frame-lights-wled-on-the-esp32) ·
-[Bench test checklist](#bench-test-checklist) · [Measurements](#measured-on-a-macbook-air-m2-8-gb-2026-10-17)
+[Bench test checklist](#bench-test-checklist) ·
+[Bring-up check](#one-command-bring-up-check) · [Measurements](#measured-on-a-macbook-air-m2-8-gb-2026-10-17)
 
 ---
 
@@ -301,6 +302,47 @@ lights back to preset 1 (idle) on the way out.
 
 Test each step on the bench before moving to the next (this follows the brief's
 build order). Tick them off.
+
+### One-command bring-up check
+
+Before ticking boxes by hand, let one command say what works and what to fix:
+
+```sh
+cd ~/MirrorMirror
+.venv/bin/python tools/bringup_check.py --json /tmp/bringup.json   # on the Orin (config/orin.toml)
+.venv/bin/python tools/bringup_check.py --config config/mac.toml --quick --skip-audio   # on the Mac
+```
+
+It does not start anything: start the servers first (`systemctl --user start mirror-stt
+mirror-llm` on the Orin, `make servers-mac` on the Mac), and stop `mirror-voice` so the
+mic, speaker and serial port are free. In order, each check prints PASS, WARN, FAIL or
+SKIP, a one-line reason and, if something is wrong, where in this README to look:
+
+1. **config**: the config loads, and every model file it and the server units use exists
+   with a plausible size (a truncated download fails).
+2. **audio input / output**: the `input_device` / `output_device` substring matches a
+   device, and the mic and speaker open for about 1 s. It reports the format they
+   negotiated. Each runs in a subprocess that is killed after 15 s, so a hung
+   ALSA/CoreAudio device can't block the check.
+3. **serial**: the WLED port exists and accepts the idle preset (the frame breathes pink).
+   With `kind = "log"` this is a WARN.
+4. **display** (Orin): xrandr's current mode is 1920x1080 (on `:0`, as the face units use).
+5. **stt server / llm server**: whisper-server and llama-server answer `/health`.
+6. **memory**: `free -m` plus one `tegrastats` line (`vm_stat` on the Mac). It FAILs
+   under 300 MB available and WARNs under 500 MB: see "Memory on the Orin" below.
+7. **e2e English / Hebrew**: an English and a Hebrew "Mirror, mirror ..." question,
+   synthesized once with the repo's voices and cached in `~/.cache/mirror-bringup`, go
+   through the real VAD -> STT -> wake -> LLM (streaming) -> TTS path, with a fake
+   speaker (`tools/record_demo.py`'s timeline). It prints the transcript and the reply,
+   and reports whether the wake phrase matched, the detected language, and the time from
+   the end of speech to the filler and to the first reply sentence. PASS when the wake
+   matched and the first sentence starts within 6 s, WARN up to 10 s.
+8. **hebrew address**: `tools/hebrew_address_check.py` with 10 questions. WARN if more
+   than 2 of the 10 replies address the visitor in the singular.
+
+`--quick` skips 7 and 8, `--skip-audio` skips 2, and `--json PATH` also writes the
+full report (every reason, transcript and measurement) as JSON. A summary table comes
+last. The exit code is 0 when nothing FAILed.
 
 **1. Panels light up**
 - [ ] NovaLCT setup done and **saved to the receiving card** (section above).

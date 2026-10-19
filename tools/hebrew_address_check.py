@@ -35,6 +35,37 @@ QUESTIONS = [
 ]
 
 
+def build_llm(cfg, config_path, url=None) -> LlamaServerLLM:
+    """The oracle's LlamaServerLLM (real prompt and world) for this config."""
+    world = load_world(resolve_repo_path(cfg.conversation.world_file, config_path))
+    return LlamaServerLLM(url or cfg.servers.llm_url, max(cfg.servers.timeout_s, 60),
+                          max_sentences=cfg.conversation.max_reply_sentences,
+                          max_chars=cfg.conversation.max_reply_chars, world=world)
+
+
+def run_check(llm, n: int, show=print) -> dict:
+    """Send n Hebrew questions, one fresh conversation each; show() each reply.
+    Returns {"n", "singular", "answered", "failed", "replies": [...]}."""
+    singular = failed = 0
+    replies = []
+    for i in range(n):
+        question = QUESTIONS[i % len(QUESTIONS)]
+        try:
+            reply = llm.reply([], question, "he")
+        except LLMError as e:
+            failed += 1
+            replies.append({"question": question, "error": str(e)})
+            show(f"[{i + 1}] {question}\n    ERROR: {e}\n")
+            continue
+        markers = singular_address(reply)
+        singular += bool(markers)
+        replies.append({"question": question, "reply": reply, "markers": markers})
+        flag = f"SINGULAR {' '.join(markers)}" if markers else "plural"
+        show(f"[{i + 1}] {question}\n    {reply}\n    -> {flag}\n")
+    return {"n": n, "singular": singular, "answered": n - failed, "failed": failed,
+            "replies": replies}
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--n", type=int, default=len(QUESTIONS), help="questions to send")
@@ -43,26 +74,8 @@ def main(argv=None) -> int:
     args = ap.parse_args(argv)
 
     cfg = load_config(args.config)
-    url = args.url or cfg.servers.llm_url
-    world = load_world(resolve_repo_path(cfg.conversation.world_file, args.config))
-    llm = LlamaServerLLM(url, max(cfg.servers.timeout_s, 60),
-                         max_sentences=cfg.conversation.max_reply_sentences,
-                         max_chars=cfg.conversation.max_reply_chars, world=world)
-
-    singular = failed = 0
-    for i in range(args.n):
-        question = QUESTIONS[i % len(QUESTIONS)]
-        try:
-            reply = llm.reply([], question, "he")
-        except LLMError as e:
-            failed += 1
-            print(f"[{i + 1}] {question}\n    ERROR: {e}\n")
-            continue
-        markers = singular_address(reply)
-        singular += bool(markers)
-        flag = f"SINGULAR {' '.join(markers)}" if markers else "plural"
-        print(f"[{i + 1}] {question}\n    {reply}\n    -> {flag}\n")
-    answered = args.n - failed
+    res = run_check(build_llm(cfg, args.config, args.url), args.n)
+    singular, answered, failed = res["singular"], res["answered"], res["failed"]
     rate = f"{100.0 * singular / answered:.0f}%" if answered else "n/a"
     print(f"singular address in {singular}/{answered} replies ({rate})"
           + (f"; {failed} request(s) failed" if failed else ""))
