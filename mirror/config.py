@@ -44,7 +44,7 @@ class TtsConfig:
     pocket_threads: int = 2
     # the "villain" character effect on every spoken line (answers, fillers, lures):
     # voice_speed < 1 resamples deeper and slower (1.0 = off), voice_room scales a
-    # small-room echo (0 = off). The sample the user picked: 0.86 and 1.0.
+    # small-room echo (0 = off). The "villain" sample: 0.86 and 1.0.
     voice_speed: float = 1.0
     voice_room: float = 0.0
 
