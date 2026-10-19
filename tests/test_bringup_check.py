@@ -776,3 +776,10 @@ def test_warmup_outcome():
     assert "2 LLM warmup errors" in res[0].reason
     res = bc.warmup_failure(names, False, None, None)
     assert "did not finish" in res[0].reason
+
+
+def test_voice_result_flags_a_pocket_fallback():
+    assert bc.voice_result("pocket", "pocket") is None
+    assert bc.voice_result("piper", "piper") is None
+    r = bc.voice_result("pocket", "piper")
+    assert r.status == bc.WARN and "piper" in r.reason and "voice" in r.name

@@ -348,6 +348,8 @@ SKIP, a one-line reason and, if something is wrong, where in this README to look
    the end of speech to the filler and to the first reply sentence. PASS when the wake
    matched and the first sentence starts within 6 s, WARN up to 10 s.
    The whole check gets 120 s (warmups included). It stops after 2 LLM errors in a row.
+   If `[tts]` asks for the cloned voice but it failed to load, a **voice** WARN says the
+   mirror is speaking with the Piper voices instead.
 8. **hebrew address**: `tools/hebrew_address_check.py` with 10 questions. WARN if more
    than 2 of the 10 replies address the visitor in the singular. It stops after
    180 s or after 2 failed requests in a row.

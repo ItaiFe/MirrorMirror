@@ -998,6 +998,17 @@ def run_turns(specs: list, budget_s: float, max_llm_errors: int = MAX_LLM_ERRORS
     return results
 
 
+def voice_result(wanted: str, got: str) -> Optional[Result]:
+    """A WARN when the config asks for Pocket (the oracle's cloned voice) but
+    load_tts fell back to Piper; None when the engine is the one asked for."""
+    if wanted == got:
+        return None
+    return Result("voice", WARN,
+                  f"tts.engine is {wanted!r} but the mirror speaks with {got!r}: the "
+                  "cloned voice failed to load (journalctl: 'falling back to piper')",
+                  "copy the voice file (README: Pocket TTS) or check its path in [tts]")
+
+
 def check_e2e(ctx: Context) -> list[Result]:
     names = ("e2e English", "e2e Hebrew")
     if ctx.status_of("stt server") != PASS or ctx.status_of("llm server") != PASS:
@@ -1016,6 +1027,7 @@ def check_e2e(ctx: Context) -> list[Result]:
     cfg = ctx.cfg
     rd._setup_env(cfg)
     router, _, engine = load_tts(cfg.tts)
+    fallback = voice_result(cfg.tts.engine, engine)
     wavs = question_wavs(cfg, ctx.args.cache, router)
     texts: dict = {}
     tl = rd.Timeline(cap_s=1e9)  # no capping: we want the real waits
@@ -1058,7 +1070,8 @@ def check_e2e(ctx: Context) -> list[Result]:
 
     specs = [(name, wavs[key][0], make_turn_fn(run, wavs[key][2], stop, show))
              for key, name in zip(E2E_QUESTIONS, names)]
-    return run_turns(specs, E2E_BUDGET_S - (time.monotonic() - t0), abandoned=stop)
+    results = run_turns(specs, E2E_BUDGET_S - (time.monotonic() - t0), abandoned=stop)
+    return results + ([fallback] if fallback else [])
 
 
 # --------------------------------------------------------------------------
