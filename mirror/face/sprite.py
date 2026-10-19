@@ -24,12 +24,24 @@ lips) into a vertical streak, so the closed shapes X and A damp the jaw
 The bank has one eye patch for both eyes (ruling R20); it is mirrored
 horizontally on the right eye box. The "open" eye is not pasted: the hub's own
 eyes show, so the right eye keeps its real (unmirrored) shape when not blinking.
+
+Floating (Task 27, FloatParams): the whole face hovers like a spirit in the
+glass: a sine bob, a slower sway (x1.37) and a tilt (x0.83), their amplitude
+sprung per state (FLOAT_STATE_AMP, FLOAT_TAU_S), the face shrunk by `scale`
+about the centre so the motion never reaches the frame edge, and the mask's
+outline faded into black (feathered once, at construction). The float is a
+similarity transform A of the warped face; it is folded into the same single
+image remap: grid(p) = A^-1(p) + D(A^-1(p)), where D is the summed warp
+displacement, resampled at A^-1(p) with one cheap 2-channel cv2.warpAffine
+(the fields are steep around the jaw, so D(p) would misplace the chin).
+With the float disabled, render() runs exactly the pre-float code path.
 """
 from __future__ import annotations
 
 import math
 import random
-from typing import Dict, Optional
+from dataclasses import dataclass
+from typing import Dict, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -58,15 +70,56 @@ MILD_BELOW = 0.4  # ...and back (hysteresis, so the patch doesn't flicker)
 # Closed-lip shapes damp the jaw: the jaw field would otherwise stretch the
 # pressed lips of the A patch into a long smear. Crossfaded with the patch.
 JAW_SHAPE_FACTOR = {"A": 0.2, "X": 0.25}
+# floating face: amplitude per state, sprung slower than the expressions
+FLOAT_STATE_AMP = {State.IDLE: 1.0, State.LISTENING: 0.7, State.THINKING: 0.8,
+                   State.SPEAKING: 0.45}
+FLOAT_TAU_S = 0.600
+FLOAT_SWAY = (0.4, 1.37)  # (amplitude x amp_px, period x period_s)
+FLOAT_TILT_PERIOD = 0.83  # x period_s
+
+
+@dataclass(frozen=True)
+class FloatParams:
+    """The floating-face settings (config face.float_*)."""
+
+    enabled: bool = True
+    amp_px: float = 5.0
+    period_s: float = 6.5
+    tilt_deg: float = 1.2
+    scale: float = 0.93
+    edge_feather_px: float = 6.0
+
+    @classmethod
+    def from_config(cls, face_cfg) -> "FloatParams":
+        return cls(enabled=bool(face_cfg.float_enabled), amp_px=float(face_cfg.float_amp_px),
+                   period_s=float(face_cfg.float_period_s),
+                   tilt_deg=float(face_cfg.float_tilt_deg), scale=float(face_cfg.float_scale),
+                   edge_feather_px=float(face_cfg.float_edge_feather_px))
+
+
+def feather_mask(mask: np.ndarray, px: float) -> np.ndarray:
+    """mask (0..255) faded to 0 over its outer `px` pixels: x smoothstep(distance
+    inside the mask / px). Monotonic across the boundary, never brighter."""
+    if px <= 0:
+        return mask
+    inside = (mask >= 127.5).astype(np.uint8)
+    dist = cv2.distanceTransform(inside, cv2.DIST_L2, cv2.DIST_MASK_PRECISE)
+    u = np.clip(dist / px, 0.0, 1.0)
+    return (mask * (u * u * (3.0 - 2.0 * u))).astype(np.float32)
 
 
 class SpriteFace:
-    def __init__(self, bank: FaceBank, rng: Optional[random.Random] = None):
+    def __init__(self, bank: FaceBank, rng: Optional[random.Random] = None,
+                 float_params: Optional[FloatParams] = None):
         self.bank = bank
         self.rng = rng or random.Random()
+        self.float_params = float_params or FloatParams(enabled=False)
         s = bank.size
         self._hub = bank.hub.astype(np.float32)
         self._mask = bank.mask.astype(np.float32) * 255.0
+        if self.float_params.enabled:
+            self._mask = feather_mask(self._mask, self.float_params.edge_feather_px)
+        self._float_amp = FLOAT_STATE_AMP[State.IDLE]
         self._loop = (np.concatenate(bank.idle_loops).astype(np.float32)
                       if bank.idle_loops else np.zeros((0, s, s, 3), np.float32))
         ys, xs = np.mgrid[0:s, 0:s].astype(np.float32)
@@ -131,6 +184,8 @@ class SpriteFace:
         k = 1.0 - math.exp(-dt / SPRING_TAU_S)
         for name, goal in target.items():
             self._w[name] += (goal - self._w[name]) * k
+        goal = FLOAT_STATE_AMP.get(state, 1.0)
+        self._float_amp += (goal - self._float_amp) * (1.0 - math.exp(-dt / FLOAT_TAU_S))
 
         self._update_mouth(viseme)
 
@@ -200,6 +255,30 @@ class SpriteFace:
         i = int(self._t * LOOP_FPS) % (2 * n - 2)
         return self._loop[i if i < n else 2 * n - 2 - i].copy()
 
+    def float_offset(self) -> Tuple[float, float, float]:
+        """The float right now: (dx px, dy px, tilt degrees), before the scale."""
+        p = self.float_params
+        if not p.enabled:
+            return 0.0, 0.0, 0.0
+        a, tau = self._float_amp, 2.0 * math.pi * self._t / p.period_s
+        sway_amp, sway_period = FLOAT_SWAY
+        return (a * sway_amp * p.amp_px * math.sin(tau / sway_period),
+                a * p.amp_px * math.sin(tau),
+                a * p.tilt_deg * math.sin(tau / FLOAT_TILT_PERIOD))
+
+    def _float_inverse(self) -> np.ndarray:
+        """2x3 affine taking an output pixel to the unfloated face: the inverse of
+        p = c + scale * R(tilt) (q - c) + (dx, dy)."""
+        dx, dy, deg = self.float_offset()
+        c = (self.bank.size - 1) / 2.0
+        th = math.radians(deg)
+        k = 1.0 / self.float_params.scale
+        cos, sin = math.cos(th) * k, math.sin(th) * k
+        # q = c + R(-th) (p - c - d) / scale
+        ux, uy = c + dx, c + dy
+        return np.array([[cos, sin, c - cos * ux - sin * uy],
+                         [-sin, cos, c + sin * ux - cos * uy]], np.float32)
+
     # -- rendering ---------------------------------------------------------
     @staticmethod
     def _blend(img: np.ndarray, patch: np.ndarray, x: int, y: int, k: float = 1.0) -> None:
@@ -237,14 +316,32 @@ class SpriteFace:
             "gaze_y": self._w["gaze_y"],
             "brows": self._w["brows"],
         }
-        grid = self._ident.copy()
-        for name, w in weights.items():
-            field = bank.warps.get(name)
-            if field is not None and abs(w) > 1e-3:
-                grid += w * field
+        if self.float_params.enabled:
+            grid = self._float_grid(weights)
+        else:
+            grid = self._ident.copy()
+            for name, w in weights.items():
+                field = bank.warps.get(name)
+                if field is not None and abs(w) > 1e-3:
+                    grid += w * field
 
         rgba = np.concatenate([img, self._mask[..., None]], axis=2)
         out = cv2.remap(rgba, grid, None, cv2.INTER_LINEAR,
                         borderMode=cv2.BORDER_CONSTANT, borderValue=0)
         rgb = out[..., :3] * (out[..., 3:4] * (1.0 / 255.0))
         return np.clip(rgb, 0, 255).astype(np.uint8)
+
+    def _float_grid(self, weights: Dict[str, float]) -> np.ndarray:
+        """The remap grid with the float folded in: A^-1(p) + D(A^-1(p))."""
+        m = self._float_inverse()
+        s = self.bank.size
+        q = (self._ident @ m[:, :2].T) + m[:, 2]
+        disp = None
+        for name, w in weights.items():
+            field = self.bank.warps.get(name)
+            if field is not None and abs(w) > 1e-3:
+                disp = w * field if disp is None else disp + w * field
+        if disp is not None:
+            q += cv2.warpAffine(disp, m, (s, s), flags=cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP,
+                                borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+        return q

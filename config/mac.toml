@@ -32,6 +32,12 @@ window_scale = 3
 bus_port = 7777
 renderer = "sprite"           # "sprite" (face bank) | "procedural" (drawn lines)
 bank = "assets/face/stub"     # face bank directory; relative to the repo root
+float_enabled = true          # the face hovers: bob, sway and tilt, with a dissolving edge
+float_amp_px = 5.0            # vertical bob +/- px at 252 (idle 1.0x, listening 0.7x, thinking 0.8x, speaking 0.45x)
+float_period_s = 6.5          # bob period; sway runs at x1.37, tilt at x0.83
+float_tilt_deg = 1.2          # +/- rotation
+float_scale = 0.93            # whole face shrunk about the centre so the motion never clips
+float_edge_feather_px = 6.0   # the outline fades into black over this many px
 
 [lights]
 kind = "log"

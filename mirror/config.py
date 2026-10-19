@@ -54,6 +54,13 @@ class FaceConfig:
     bus_port: int = 7777
     renderer: str = "sprite"  # "sprite" (face bank) | "procedural" (drawn lines)
     bank: str = "assets/face/stub"  # face bank directory; relative to the repo root
+    # the floating face (Task 27): a spirit hovering in the glass
+    float_enabled: bool = True
+    float_amp_px: float = 5.0  # vertical bob, +/- px at 252 (idle; less in other states)
+    float_period_s: float = 6.5  # bob period; sway x1.37, tilt x0.83
+    float_tilt_deg: float = 1.2  # +/- rotation
+    float_scale: float = 0.93  # the whole face shrunk about the centre: margin for the motion
+    float_edge_feather_px: float = 6.0  # the outline fades into black over this many px
 
 
 @dataclass

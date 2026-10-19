@@ -34,3 +34,16 @@ def test_make_sprite_face_from_config(tmp_path):
     cfg.face.renderer = "bogus"
     with pytest.raises(ValueError):
         make_sprite_face(cfg, "config/mac.toml")
+
+
+def test_make_sprite_face_passes_float_config():
+    from mirror.config import load_config
+    from mirror.face.app import make_sprite_face
+
+    cfg = load_config("config/mac.toml")
+    path = os.path.abspath("config/mac.toml")
+    assert make_sprite_face(cfg, path).float_params.enabled is True
+    cfg.face.float_enabled = False
+    cfg.face.float_amp_px = 3.0
+    p = make_sprite_face(cfg, path).float_params
+    assert p.enabled is False and p.amp_px == 3.0
