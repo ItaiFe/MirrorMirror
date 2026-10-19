@@ -9,6 +9,7 @@ import socket
 from mirror.states import State
 
 HOST = "127.0.0.1"
+_MAX_DATAGRAM = 65535  # a UDP datagram's ceiling: a smaller read silently truncates
 
 
 class FaceBus:
@@ -36,7 +37,7 @@ class FaceBus:
         latest = None
         while True:
             try:
-                data, _ = self._sock.recvfrom(1024)
+                data, _ = self._sock.recvfrom(_MAX_DATAGRAM)
             except BlockingIOError:
                 break
             try:

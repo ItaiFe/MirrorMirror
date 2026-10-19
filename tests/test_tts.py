@@ -152,6 +152,16 @@ def test_router_output_float32_mono():
     assert a[1] == pytest.approx(0.5) and a[2] == pytest.approx(-1.0)
 
 
+def test_normalize_scales_other_integer_dtypes():
+    from mirror.tts import _normalize
+
+    i32, _ = _normalize(np.array([0, 2**30], dtype=np.int32), 16000)
+    u8, _ = _normalize(np.array([128, 255, 0], dtype=np.uint8), 16000)
+    assert i32.dtype == np.float32 and i32[1] == pytest.approx(0.5)
+    assert u8.dtype == np.float32
+    assert u8[0] == pytest.approx(0.0) and u8[2] == pytest.approx(-1.0)
+
+
 def test_router_float64_becomes_float32():
     router = TTSRouter(en=FakeSynth(np.zeros(5)), he=FakeSynth(np.zeros(5)))
     a, _ = router.synth("x", "he")

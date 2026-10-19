@@ -42,3 +42,16 @@ def test_bus_old_message_defaults_x():
     finally:
         raw.close()
         rx.close()
+
+
+def test_bus_long_datagram_is_read_whole():
+    rx = FaceBus.receiver(17780)
+    raw = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:  # over the old 1024-byte read, which truncated it into invalid JSON
+        msg = {"s": "speaking", "m": 0.5, "v": "B", "pad": "x" * 2000}
+        raw.sendto(json.dumps(msg).encode(), ("127.0.0.1", 17780))
+        time.sleep(0.05)
+        assert rx.poll() == (State.SPEAKING, 0.5, "B")
+    finally:
+        raw.close()
+        rx.close()

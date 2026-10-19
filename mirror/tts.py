@@ -22,10 +22,13 @@ class Synth(Protocol):
 
 
 def _normalize(audio, rate: int) -> tuple[np.ndarray, int]:
-    """int16 -> float32 in -1..1, flatten to mono 1-D, float64 -> float32."""
+    """Integer PCM (int16, int32, offset-binary uint8, ...) -> float32 in -1..1,
+    flatten to mono 1-D, float64 -> float32."""
     a = np.asarray(audio)
-    if a.dtype == np.int16:
-        a = a.astype(np.float32) / 32768.0
+    if np.issubdtype(a.dtype, np.integer):
+        half = 2.0 ** (8 * a.dtype.itemsize - 1)
+        offset = half if np.issubdtype(a.dtype, np.unsignedinteger) else 0.0
+        a = ((a.astype(np.float64) - offset) / half).astype(np.float32)
     else:
         a = a.astype(np.float32, copy=False)
     return a.reshape(-1), int(rate)

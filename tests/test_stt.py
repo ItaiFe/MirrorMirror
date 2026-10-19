@@ -35,6 +35,13 @@ def test_unknown_lang_maps_to_en():
     assert make().transcribe(SAMPLES).lang == "en"
 
 
+@pytest.mark.parametrize("server_lang", ["HE", "he-IL", "he_IL", " Hebrew "])
+@responses.activate
+def test_server_language_ignores_case_and_region(server_lang):
+    responses.post(URL + "/inference", json={"text": "42", "language": server_lang})
+    assert make().transcribe(SAMPLES).lang == "he"
+
+
 @responses.activate
 def test_timeout_raises():
     responses.post(URL + "/inference", body=requests.exceptions.Timeout())

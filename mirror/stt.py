@@ -82,5 +82,7 @@ class WhisperServerSTT:
         lang = script_language(text)
         if lang is None:
             server = payload.get(LANGUAGE_FIELD) or payload.get(_LANGUAGE_FALLBACK_FIELD)
-            lang = "he" if str(server).strip().lower() in _HEBREW else "en"
+            # case- and region-blind: "HE", "he-IL" and "he_IL" are all Hebrew
+            code = str(server).strip().lower().replace("_", "-").split("-")[0]
+            lang = "he" if code in _HEBREW else "en"
         return Transcript(text, lang)
