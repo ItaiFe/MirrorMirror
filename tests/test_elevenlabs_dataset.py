@@ -248,3 +248,23 @@ def test_check_with_whisper_server(tmp_path, capsys):
     assert ed.main([path, "--out", out, "--check", "--stt-url", "http://stt:8081"]) == 0
     assert b'name="language"\r\n\r\nhe' in responses.calls[0].request.body
     assert "0 flagged" in capsys.readouterr().out
+
+
+def test_check_ignores_digit_transcripts_and_slow_oracle_speech():
+    import numpy as np
+    import elevenlabs_dataset as ed
+
+    class STT:
+        def __init__(self, text):
+            self.text = text
+
+        def transcribe(self, samples, sr=16000, language=None):
+            from mirror.stt import Transcript
+            return Transcript(self.text, "he")
+
+    sr = 22050
+    pcm = (8000 * np.sin(np.arange(int(4.4 * sr)) * 0.05)).astype(np.int16)
+    text = "בשנת אלפיים עשרים ושש המראה התחילה לדבר."  # 41 chars in 4.4 s: ~9.3 cps
+    row = ed.check_clip(text, pcm, sr, STT("בשנת 2026 המראה התחילה לדבר."))
+    assert row["cer"] > ed.MAX_CER and row["flags"] == []
+    assert "cer" in ed.check_clip(text, pcm, sr, STT("משהו אחר לגמרי בכלל."))["flags"]
