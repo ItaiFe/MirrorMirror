@@ -389,6 +389,8 @@ def test_llama_server_keeps_full_swa_cache_in_dev_and_deploy():
         # 8-bit KV cache (V quantization needs flash attention): ~-0.55 GB on the Orin
         assert re.search(r"-fa on\b", cmd)
         assert re.search(r"-ctk q8_0\b", cmd) and re.search(r"-ctv q8_0\b", cmd)
+        # no host-RAM prompt cache: the per-language slots already keep the prompt
+        assert re.search(r"-cram 0\b", cmd)
 
 
 def test_llm_model_file_is_one_setting():

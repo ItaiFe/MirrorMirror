@@ -11,8 +11,9 @@ Environment=LLM_MODEL=gemma-3-4b-it-Q4_K_M.gguf
 # --swa-full: Gemma 3's sliding-window cache otherwise turns cache_reuse off, and the
 # English slot re-processes ~500 prompt tokens per turn (+~580 MiB KV at f16).
 # -fa on -ctk q8_0 -ctv q8_0: an 8-bit KV cache (half of f16; V quantization needs
-# flash attention). If RAM is short, see README "Memory on the Orin" for what to cut next.
-ExecStart=%h/mirror-bin/llama-server -m %h/mirror-models/${LLM_MODEL} -ngl 99 -c 8192 -np 2 --cache-reuse 256 --swa-full -fa on -ctk q8_0 -ctv q8_0 --host 127.0.0.1 --port 8080
+# flash attention). -cram 0: no host-RAM prompt cache (up to ~0.45 GB); each
+# language keeps its own slot, so its prompt stays cached in the KV anyway. If RAM is short, see README "Memory on the Orin" for what to cut next.
+ExecStart=%h/mirror-bin/llama-server -m %h/mirror-models/${LLM_MODEL} -ngl 99 -c 8192 -np 2 --cache-reuse 256 --swa-full -fa on -ctk q8_0 -ctv q8_0 -cram 0 --host 127.0.0.1 --port 8080
 Restart=always
 RestartSec=2
 

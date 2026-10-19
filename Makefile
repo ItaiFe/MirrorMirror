@@ -13,8 +13,10 @@ WHISPER := whisper-server -m $(STT_MODEL) -ac 768 --port 8081
 # --swa-full: Gemma 3's sliding-window cache otherwise turns cache_reuse off, and the
 # English slot re-processes ~500 prompt tokens per turn (+~580 MiB KV at -c 8192 -np 2).
 # -fa on -ctk q8_0 -ctv q8_0: an 8-bit KV cache (half of f16; V quantization needs
-# flash attention), for headroom on the 8 GB Orin (README "Memory on the Orin")
-LLAMA := llama-server -m $(LLM_MODEL) --port 8080 -c 8192 -ngl 99 -np 2 --cache-reuse 256 --swa-full -fa on -ctk q8_0 -ctv q8_0
+# flash attention), for headroom on the 8 GB Orin (README "Memory on the Orin").
+# -cram 0: no host-RAM prompt cache (up to ~0.45 GB); each language keeps its own slot,
+# so its prompt stays cached in the KV anyway
+LLAMA := llama-server -m $(LLM_MODEL) --port 8080 -c 8192 -ngl 99 -np 2 --cache-reuse 256 --swa-full -fa on -ctk q8_0 -ctv q8_0 -cram 0
 LOGS ?= /tmp/mirror-dev
 
 test:

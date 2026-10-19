@@ -344,11 +344,12 @@ build order). Tick them off.
 
 The 8 GB Orin is tight: with everything running, the estimate is about 7.1-7.4 GB of the
 7.62 GB `tegrastats` shows. That counts llama-server at about 3.8 GB (with the 8-bit KV
-cache), whisper-server at about 1 GB, mirror-voice at about 1 GB, mirror-face at about
-0.2 GB, and JetPack plus GNOME at about 1.3 GB. There is no swap file, only zram. If memory
-runs out, the kernel kills a server mid-event, which costs a 10-20 s restart and fallback
-replies. **Measure memory first, before the rest of step 3.** Start everything, ask one
-English and one Hebrew question, then run:
+cache and no host-RAM prompt cache, `-cram 0`), whisper-server at about 1 GB,
+mirror-voice at about 1 GB, mirror-face at about 0.2 GB, and JetPack plus GNOME at
+about 1.3 GB. There is no swap file, only zram. If memory runs out, the kernel kills a
+server mid-event, which costs a 10-20 s restart and fallback replies.
+**Measure memory first, before the rest of step 3.** Start everything, ask one English
+and one Hebrew question, then run:
 
 ```sh
 free -m          # the "available" column, in MB
@@ -370,7 +371,7 @@ mkdir -p ~/.config/systemd/user/mirror-llm.service.d
 cat > ~/.config/systemd/user/mirror-llm.service.d/override.conf <<'CONF'
 [Service]
 ExecStart=
-ExecStart=%h/mirror-bin/llama-server -m %h/mirror-models/${LLM_MODEL} -ngl 99 -c 8192 -np 2 --cache-reuse 256 -fa on -ctk q8_0 -ctv q8_0 -ub 256 --host 127.0.0.1 --port 8080
+ExecStart=%h/mirror-bin/llama-server -m %h/mirror-models/${LLM_MODEL} -ngl 99 -c 8192 -np 2 --cache-reuse 256 -fa on -ctk q8_0 -ctv q8_0 -cram 0 -ub 256 --host 127.0.0.1 --port 8080
 CONF
 systemctl --user daemon-reload && systemctl --user restart mirror-llm
 ```
