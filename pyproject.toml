@@ -43,7 +43,8 @@ pocket = ["sentencepiece==0.2.2", "onnxruntime==1.23.2"]
 # The MMS Hebrew fallback voice only (tts.he_engine = "mms"). On the Orin, install
 # NVIDIA's JetPack torch wheel first: deploy/setup_orin.sh --with-mms.
 mms = ["transformers", "torch"]
-dev = ["pytest", "responses"]
+# python-bidi: tools/record_demo.py draws Hebrew subtitles in RTL order with it.
+dev = ["pytest", "responses", "python-bidi==0.6.6"]
 
 [project.scripts]
 mirror-voice = "mirror.voice_main:main"
