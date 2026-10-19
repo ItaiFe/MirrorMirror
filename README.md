@@ -376,15 +376,15 @@ CONF
 systemctl --user daemon-reload && systemctl --user restart mirror-llm
 ```
 
-a. **Drop `--swa-full`** (saves about 0.3 GB with the 8-bit KV cache). Remove it from the
+a. **Drop `--swa-full`** (estimated saving about 0.3 GB with the 8-bit KV cache). Remove it from the
    line. The cost: the English slot re-processes about 500 prompt tokens per turn again,
    which adds to the English reply latency.
-b. **`-ub 256`** (saves about 0.25 GB of compute buffer). Add it to the line. Prompt
+b. **`-ub 256`** (estimated saving about 0.25 GB of compute buffer). Add it to the line. Prompt
    processing gets a little slower.
 c. **`-c 6144`** (a smaller KV cache). Change `-c 8192` to `-c 6144`. Each of the two
    slots then holds 3072 tokens, which is still enough for the system prompt and a short
    history.
-d. **Go back to the stock Whisper small model** (saves about 0.4 GB). Hebrew recognition
+d. **Go back to the stock Whisper small model** (estimated saving about 0.4 GB). Hebrew recognition
    gets worse: in the Task 22 tests, 8/16 Hebrew wakes instead of 16/16. Check that
    `~/mirror-models/ggml-small.bin` exists, then run:
 
@@ -395,7 +395,7 @@ d. **Go back to the stock Whisper small model** (saves about 0.4 GB). Hebrew rec
    systemctl --user daemon-reload && systemctl --user restart mirror-stt
    ```
 
-e. **Advanced: a bare X session instead of GNOME** (saves about 0.5-0.8 GB: gnome-shell,
+e. **Advanced: a bare X session instead of GNOME** (estimated saving about 0.5-0.8 GB: gnome-shell,
    evolution, tracker and gnome-software no longer run). This has not been tried on the
    Orin yet. GDM keeps autologging you in on Xorg, so `DISPLAY=:0` and the
    `%t/gdm/Xauthority` path that the face units use stay valid. Only the session changes,
@@ -413,12 +413,27 @@ e. **Advanced: a bare X session instead of GNOME** (saves about 0.5-0.8 GB: gnom
    sudo reboot
    ```
 
-   If that file already exists, edit its two lines instead of replacing it. After the
-   reboot, the face should come up on its own (the user units start with the login, not
-   with GNOME). Check it with `ps -e | grep -c gnome-shell`, which should print 0. Then
-   check `free -m` again. Without GNOME, its blanking settings no longer apply. The
-   units' `xset s off -dpms` covers that. Run the step-2 "left alone for 15 minutes"
-   check again. To undo this cut, set both lines back to `ubuntu` and reboot.
+   Before you change anything, note the stock session's name. Run
+   `ls /usr/share/xsessions` (usually `ubuntu.desktop`, which means `ubuntu`), and check
+   `cat /var/lib/AccountsService/users/$USER` for the current `Session=` / `XSession=`
+   values. If that file already exists, edit its two lines instead of replacing it.
+
+   After the reboot, the face should come up on its own. The user units start at boot
+   (setup_orin.sh enables linger), not with the desktop, and mirror-face retries every 2 s
+   until X is up. Check it with `ps -e | grep -c gnome-shell`, which should print 0. Then
+   check `free -m` again. Without GNOME, its blanking settings no longer apply. The units'
+   `xset s off -dpms` covers that. Run the step-2 "left alone for 15 minutes" check again.
+
+   **To undo this cut, or if Openbox doesn't start** (a black screen, or GDM loops back to
+   its login screen), SSH in or switch to a text console with Ctrl+Alt+F3 and log in.
+   Then set both lines back to the stock session name you noted and reboot:
+
+   ```sh
+   ls /usr/share/xsessions                # e.g. ubuntu.desktop -> "ubuntu"
+   sudo sed -i 's/^Session=.*/Session=ubuntu/; s/^XSession=.*/XSession=ubuntu/' \
+       /var/lib/AccountsService/users/$USER
+   sudo reboot
+   ```
 
 **7. Into the frame**
 - [ ] Mic at face height behind foam; the wake phrase works from where people will stand.

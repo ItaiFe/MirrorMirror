@@ -305,8 +305,9 @@ def build_tts(tts_cfg: TtsConfig):
                                    voice_file=tts_cfg.pocket_voice_file,
                                    threads=tts_cfg.pocket_threads, g2p=g2p)
             router = tts.TTSRouter(pocket.for_lang("en"), pocket.for_lang("he"))
-            router.warmup()  # one short line per language: a model that loads but
-            log.info("TTS: pocket (voice %s, %d threads)",  # can't speak falls back too
+            # one short line per language: a model that loads but can't speak falls back too
+            router.warmup()
+            log.info("TTS: pocket (voice %s, %d threads)",
                      tts_cfg.pocket_voice_file or tts_cfg.pocket_voice, tts_cfg.pocket_threads)
             return router, pocket.sample_rate, "pocket"
         except Exception as e:
@@ -318,8 +319,9 @@ def build_tts(tts_cfg: TtsConfig):
 
 
 def load_tts(tts_cfg: TtsConfig):
-    """build_tts, warmed up once: Pocket is already warmed inside build_tts's
-    fallback, so only the piper stack is warmed here."""
+    """build_tts, warmed up once. Pocket is already warmed inside build_tts's try
+    block, where a warmup failure triggers the piper fallback, so only the piper
+    stack is warmed here."""
     router, rate, engine = build_tts(tts_cfg)
     if engine != "pocket":
         router.warmup()
