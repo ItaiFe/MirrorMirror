@@ -793,3 +793,19 @@ def test_router_without_the_effect_is_unchanged():
     router = TTSRouter(en=FakeSynth(pcm, 22050), he=FakeSynth(pcm, 22050))
     a, _ = router.synth("hello", "en")
     assert np.array_equal(a, pcm)
+
+
+def test_shorten_pauses_caps_long_gaps_and_keeps_speech():
+    from mirror.tts import shorten_pauses
+
+    sr = 16000
+    tone = (0.5 * np.sin(np.arange(int(0.5 * sr)) * 0.3)).astype(np.float32)
+    gap = np.zeros(int(1.5 * sr), np.float32)
+    short = np.zeros(int(0.2 * sr), np.float32)
+    audio = np.concatenate([tone, gap, tone, short, tone])
+    out = shorten_pauses(audio, sr, max_gap_s=0.4)
+    # the 1.5 s pause becomes ~0.4 s; the 0.2 s one is left alone
+    assert abs(len(out) / sr - (1.5 + 0.4 + 0.2)) < 0.1
+    assert float(np.abs(out).sum()) == pytest.approx(float(np.abs(audio).sum()), rel=0.02)
+    assert shorten_pauses(tone, sr) is tone
+    assert len(shorten_pauses(np.zeros(0, np.float32), sr)) == 0

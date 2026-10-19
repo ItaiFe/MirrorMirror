@@ -323,6 +323,9 @@ POCKET_S_PER_CHAR = 0.055
 # beyond these margins is cut, so it neither delays the reply nor hides a truncation.
 POCKET_LEAD_S = 0.1
 POCKET_TAIL_S = 0.2
+# a cloned voice copies its reference's dramatic pacing: pauses longer than this are
+# cut down to it, so a reply doesn't stall for a second at every comma
+POCKET_MAX_PAUSE_S = 0.4
 _NOT_PHONEMES = frozenset(" ,.?!…;:-—–\"'ˈˌːˑ")
 
 
@@ -331,6 +334,23 @@ def expected_duration(text: str, ipa: str | None) -> float:
     if ipa:
         return POCKET_S_PER_PHONEME * sum(1 for c in ipa if c not in _NOT_PHONEMES)
     return POCKET_S_PER_CHAR * len(text.strip())
+
+
+def shorten_pauses(audio: np.ndarray, sr: int,
+                   max_gap_s: float = POCKET_MAX_PAUSE_S) -> np.ndarray:
+    """Audio with every silence between voiced stretches cut to at most max_gap_s
+    (the middle of the pause goes). Returns the input itself if nothing is cut."""
+    segs = voiced_segments(audio, sr)
+    keep, pos = [], 0
+    for (_, end), (start, _) in zip(segs, segs[1:]):
+        if start - end > max_gap_s:
+            a, b = int((end + max_gap_s / 2) * sr), int((start - max_gap_s / 2) * sr)
+            keep.append(audio[pos:a])
+            pos = b
+    if not keep:
+        return audio
+    keep.append(audio[pos:])
+    return np.concatenate(keep)
 
 
 def trim_silence(audio: np.ndarray, sr: int, lead_s: float = POCKET_LEAD_S,
@@ -439,7 +459,8 @@ class PocketTTS:
             model_input, phonemes = text, False
         if not model_input.strip(" ,.?!"):
             return np.zeros(0, np.float32), self._rate, None
-        audio = self._generate(model_input, phonemes, expected_duration(text, ipa))
+        audio = shorten_pauses(
+            self._generate(model_input, phonemes, expected_duration(text, ipa)), self._rate)
         track = estimate_track(ipa, audio, self._rate) if ipa else None
         return audio, self._rate, track
 
