@@ -525,3 +525,41 @@ def test_build_tts_pocket_synth_failure_falls_back_to_piper(monkeypatch, caplog)
     assert engine == "piper" and rate == 22050 and isinstance(router._en, FakePiper)
     assert any(r.levelname == "WARNING" and "pocket" in r.getMessage().lower()
                for r in caplog.records)
+
+
+def test_build_tts_pocket_logs_which_engine_loaded(monkeypatch, caplog):
+    from mirror.voice_main import build_tts
+
+    _stub_piper_stack(monkeypatch)
+    monkeypatch.setattr(mirror.tts, "PocketTTS", FakePocket)
+    with caplog.at_level("INFO", logger="mirror.voice"):
+        build_tts(TtsConfig(engine="pocket", pocket_voice="michael"))
+    assert any(r.levelname == "INFO" and "pocket" in r.getMessage().lower()
+               and "michael" in r.getMessage() for r in caplog.records)
+
+
+class _CountingRouter:
+    def __init__(self):
+        self.warmups = 0
+
+    def warmup(self):
+        self.warmups += 1
+
+
+@pytest.mark.parametrize("engine", ["piper", "pocket"])
+def test_load_tts_warms_up_exactly_once(monkeypatch, engine):
+    """build_tts already warms Pocket (inside its fallback); load_tts warms only the
+    piper stack, so Pocket is not warmed twice at startup."""
+    import mirror.voice_main as vm
+
+    router = _CountingRouter()
+    if engine == "pocket":
+        def fake_build(cfg):
+            router.warmup()  # what build_tts does for pocket
+            return router, 24000, "pocket"
+    else:
+        def fake_build(cfg):
+            return router, 22050, "piper"
+    monkeypatch.setattr(vm, "build_tts", fake_build)
+    assert vm.load_tts(TtsConfig(engine=engine))[2] == engine
+    assert router.warmups == 1

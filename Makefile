@@ -11,8 +11,10 @@ LLM_MODEL ?= $(MODELS)/gemma-3-4b-it-Q4_K_M.gguf
 # -ac 768: a 15.36 s audio context (the VAD caps segments at 15 s), ~2x faster than 1500
 WHISPER := whisper-server -m $(STT_MODEL) -ac 768 --port 8081
 # --swa-full: Gemma 3's sliding-window cache otherwise turns cache_reuse off, and the
-# English slot re-processes ~500 prompt tokens per turn (+~580 MiB KV at -c 8192 -np 2)
-LLAMA := llama-server -m $(LLM_MODEL) --port 8080 -c 8192 -ngl 99 -np 2 --cache-reuse 256 --swa-full
+# English slot re-processes ~500 prompt tokens per turn (+~580 MiB KV at -c 8192 -np 2).
+# -fa on -ctk q8_0 -ctv q8_0: an 8-bit KV cache (half of f16; V quantization needs
+# flash attention), for headroom on the 8 GB Orin (README "Memory on the Orin")
+LLAMA := llama-server -m $(LLM_MODEL) --port 8080 -c 8192 -ngl 99 -np 2 --cache-reuse 256 --swa-full -fa on -ctk q8_0 -ctv q8_0
 LOGS ?= /tmp/mirror-dev
 
 test:

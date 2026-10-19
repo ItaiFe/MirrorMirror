@@ -8,7 +8,10 @@ version = "0.1.0"
 description = "Mirror, Mirror: a talking LED mirror"
 requires-python = ">=3.10"
 dependencies = [
-    "numpy",
+    # numpy 2.4 needs Python >= 3.11; 2.2.6 is the newest with cp310 (JetPack 6)
+    # aarch64 wheels. 2.4.6 is the Mac venv's (3.11).
+    "numpy==2.2.6; python_version < '3.11'",
+    "numpy==2.4.6; python_version >= '3.11'",
     "opencv-python-headless",
     "pillow",
     "pygame",

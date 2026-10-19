@@ -306,13 +306,24 @@ def build_tts(tts_cfg: TtsConfig):
                                    threads=tts_cfg.pocket_threads, g2p=g2p)
             router = tts.TTSRouter(pocket.for_lang("en"), pocket.for_lang("he"))
             router.warmup()  # one short line per language: a model that loads but
-            return router, pocket.sample_rate, "pocket"  # can't speak falls back too
+            log.info("TTS: pocket (voice %s, %d threads)",  # can't speak falls back too
+                     tts_cfg.pocket_voice_file or tts_cfg.pocket_voice, tts_cfg.pocket_threads)
+            return router, pocket.sample_rate, "pocket"
         except Exception as e:
             log.warning("Pocket TTS (%s) failed to load (%s: %s); falling back to piper",
                         tts_cfg.pocket_model, type(e).__name__, e)
     log.info("loading TTS voices (Hebrew: %s, G2P %s)", tts_cfg.he_engine, tts_cfg.he_g2p)
     en_tts = tts.PiperTTS(tts_cfg.piper_voice_en)
     return tts.TTSRouter(en_tts, build_hebrew_tts(tts_cfg)), en_tts.sample_rate, "piper"
+
+
+def load_tts(tts_cfg: TtsConfig):
+    """build_tts, warmed up once: Pocket is already warmed inside build_tts's
+    fallback, so only the piper stack is warmed here."""
+    router, rate, engine = build_tts(tts_cfg)
+    if engine != "pocket":
+        router.warmup()
+    return router, rate, engine
 
 
 def warm_llm(llm) -> list:
@@ -361,8 +372,7 @@ def run(cfg: Config, wav_path=None, config_path=None) -> int:
         llm = LlamaServerLLM(cfg.servers.llm_url, cfg.servers.timeout_s,
                              cfg.conversation.max_reply_sentences,
                              cfg.conversation.max_reply_chars, world=world)
-        tts, tts_rate, engine = build_tts(cfg.tts)  # after the env is set
-        tts.warmup()
+        tts, tts_rate, engine = load_tts(cfg.tts)  # after the env is set
         fillers = FillerBank(tts, FILLERS,
                              max_clip_s=FILLER_BUDGET_S if engine == "pocket" else None)
         t0 = time.monotonic()

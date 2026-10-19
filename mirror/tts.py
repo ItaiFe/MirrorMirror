@@ -195,6 +195,11 @@ def map_renikud_ipa(ipa: str, voice_symbols_only: bool = True) -> str:
     return out.lstrip(" ,.?!")
 
 
+# RenikudPlus's onnxruntime intra-op threads: ORT's default is one per core, and on
+# the Orin the 6 cores are shared with whisper, llama and the face.
+RENIKUD_THREADS = 2
+
+
 class RenikudG2P:
     """Plain Hebrew text -> IPA with RenikudPlus (ONNX, CPU), speaker-gender aware
     (0 unknown, 1 male, 2 female; the oracle is masculine). The model loads on the
@@ -210,9 +215,13 @@ class RenikudG2P:
     def _load(self):
         with self._lock:
             if self._g2p is None:
-                from renikud_onnx import G2P  # lazy: heavy optional dep
+                import onnxruntime as ort  # lazy: heavy optional deps
+                from renikud_onnx import G2P
 
-                self._g2p = G2P(self._model_path, datastore=None, lexicon=RENIKUD_LEXICON)
+                opts = ort.SessionOptions()
+                opts.intra_op_num_threads = RENIKUD_THREADS
+                self._g2p = G2P(self._model_path, datastore=None, lexicon=RENIKUD_LEXICON,
+                                session_options=opts)
         return self._g2p
 
     def _raw(self, text: str) -> str:

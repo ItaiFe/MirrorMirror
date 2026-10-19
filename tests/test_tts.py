@@ -656,3 +656,16 @@ def test_pocket_hebrew_without_g2p_is_a_clear_error(monkeypatch):
     assert len(tts.synth("Hello there.", "en")[0]) > 0  # English needs no G2P
     with pytest.raises(ValueError, match="G2P"):
         tts.synth("שלום", "he")
+
+
+def test_renikud_g2p_caps_its_onnxruntime_threads(monkeypatch):
+    """RenikudPlus gets 2 intra-op threads, not one per core (it shares the Orin's
+    6 cores with whisper, llama and the face)."""
+    record = _fake_renikud(monkeypatch)
+    from mirror.tts import RENIKUD_THREADS, RenikudG2P
+
+    assert RENIKUD_THREADS == 2
+    RenikudG2P("models/r.onnx").phonemize("שלום")
+    (_, kwargs), = record["inits"]
+    opts = kwargs["session_options"]
+    assert opts.intra_op_num_threads == 2
