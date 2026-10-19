@@ -870,12 +870,12 @@ class GuardedSTT:
     def __getattr__(self, name):  # .calls etc. of the wrapped TimedSTT
         return getattr(self._stt, name)
 
-    def transcribe(self, samples, sr: int = 16000):
+    def transcribe(self, samples, sr: int = 16000, language=None):
         from mirror.stt import STTError
 
         if self._abandoned.is_set():
             raise STTError("bring-up turn abandoned")
-        return self._stt.transcribe(samples, sr)
+        return self._stt.transcribe(samples, sr, language=language)
 
 
 class GuardedLLM:
@@ -1036,8 +1036,9 @@ def check_e2e(ctx: Context) -> list[Result]:
     vad = SileroVad(os.path.join(os.path.abspath(cfg.models_dir), "silero_vad.onnx"))
     segmenter = Segmenter(vad, frame_samples=CHUNK, sample_rate=cfg.audio.sample_rate)
     stop = ctx.abandoned
-    stt = GuardedSTT(rd.TimedSTT(WhisperServerSTT(cfg.servers.stt_url, cfg.servers.timeout_s)),
-                     stop)
+    whisper = WhisperServerSTT(cfg.servers.stt_url, cfg.servers.timeout_s,
+                               cfg.servers.stt_language)
+    stt = GuardedSTT(rd.TimedSTT(whisper), stop)
     llm = GuardedLLM(rd.TimedLLM(build_llm(cfg, ctx.config_path)), stop)
     text_tts = rd.TextTTS(router, texts, kind="filler")
     tts = GuardedTTS(text_tts, stop)

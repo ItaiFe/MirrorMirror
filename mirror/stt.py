@@ -50,17 +50,23 @@ def _to_wav_bytes(samples: np.ndarray, sr: int) -> bytes:
 
 
 class WhisperServerSTT:
-    def __init__(self, url: str, timeout_s: float):
+    def __init__(self, url: str, timeout_s: float, language: str = "auto"):
         self._endpoint = url.rstrip("/") + "/inference"
         self._timeout_s = timeout_s
+        self._language = language  # the default for transcribe()
 
-    def transcribe(self, samples: np.ndarray, sr: int = 16000) -> Transcript:
+    def transcribe(self, samples: np.ndarray, sr: int = 16000,
+                   language: str | None = None) -> Transcript:
+        """language: "auto", or a code ("he", "en") to force; None: the constructor's.
+        Forcing skips language detection; "en" re-reads English that the Hebrew
+        fine-tune wrote in Hebrew letters."""
+        language = self._language if language is None else language
         wav = _to_wav_bytes(samples, sr)
         try:
             resp = requests.post(
                 self._endpoint,
                 files={"file": ("speech.wav", wav, "audio/wav")},
-                data={"response_format": "verbose_json", "language": "auto",
+                data={"response_format": "verbose_json", "language": language,
                       "temperature": "0"},
                 timeout=self._timeout_s,
             )

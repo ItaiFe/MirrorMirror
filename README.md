@@ -46,8 +46,13 @@ Then say "Mirror, mirror on the wall, ..." or "מראה, מראה שעל הקי�
   (a 15.36 s audio context: the VAD caps segments at 15 s). It hears the Hebrew wake
   phrase far better than stock small (15-16/16 vs 8/16 on synthetic clips), but it
   labels every clip "hebrew", so the reply language comes from the transcript's script
-  (more Hebrew letters than Latin -> Hebrew). English it transliterates into Hebrew
-  letters ("מיר מיר") gets a Hebrew reply. Back to stock small:
+  (more Hebrew letters than Latin -> Hebrew). Most visitors are expected to speak Hebrew,
+  so `servers.stt_language = "he"` skips language detection (~0.6 s per question on an
+  M2). The cost is English: the model often writes it in Hebrew letters or translates it.
+  When the wake phrase comes out as English in Hebrew letters ("מירר מירר"), the segment
+  is transcribed again with English forced, and so are that conversation's follow-ups
+  that come out in Hebrew letters; an English wake it translated ("מראה מראה") is
+  answered in Hebrew. `"auto"` detects the language instead. Back to stock small:
   `make dev STT_MODEL=models/ggml-small.bin`; on the Orin
   `systemctl --user edit mirror-stt` -> `[Service]` `Environment=STT_MODEL=ggml-small.bin`.
 - `mirror-voice --config config/mac.toml --wav FILE.wav` feeds a WAV through VAD and the

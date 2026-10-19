@@ -25,7 +25,7 @@ from mirror.config import ConversationConfig
 from mirror.llm import LLMError, server_unreachable
 from mirror.persona import FALLBACK, SYSTEM_PROMPT, pick_angle
 from mirror.states import State
-from mirror.stt import STTError
+from mirror.stt import STTError, Transcript
 from mirror.visemes import rms_shape
 from mirror.wake import is_hallucination, match_wake
 
@@ -64,6 +64,7 @@ class Controller:
         self._fillers = fillers  # FillerBank or None
         self._first_sentence_timeout_s = first_sentence_timeout_s
         self._state = State.IDLE
+        self._english_wake = False  # the last wake phrase was English (see _handle)
         self._deadline = 0.0
         self._history: list[dict] = []
         self._busy = False
@@ -221,6 +222,17 @@ class Controller:
         if is_hallucination(transcript.text):
             return
         wake = match_wake(transcript.text)
+        if wake is not None:
+            self._english_wake = wake.english
+        # ivrit-ai's Hebrew fine-tune sometimes writes English speech in Hebrew letters
+        # ("מירר מירר"): after an English wake, read a Hebrew-letter segment again as English
+        retry = (wake.english if wake is not None
+                 else self._state == State.LISTENING and self._english_wake)
+        if retry and transcript.lang != "en":
+            english = self._english_retry(samples)
+            if english is not None and (wake is None or match_wake(english.text)):
+                transcript = english
+                wake = None if wake is None else match_wake(english.text)
         if self._state == State.IDLE:
             if wake is None:
                 return
@@ -232,6 +244,17 @@ class Controller:
             self._answer(text, transcript.lang)
         else:
             self._listen(self._cfg.listen_timeout_s)
+
+    def _english_retry(self, samples: np.ndarray) -> Transcript | None:
+        """The segment transcribed again with English forced; None unless that gives
+        Latin-script text."""
+        try:
+            transcript = self._stt.transcribe(samples, language="en")
+        except STTError as e:
+            log.warning("stt (English retry) failed: %s", e)
+            return None
+        log.info("heard again as English: %r", transcript.text)
+        return transcript if transcript.lang == "en" and transcript.text else None
 
     def _answer(self, text: str, lang: str) -> None:
         self._set_state(State.THINKING)

@@ -17,9 +17,11 @@ class FakeSTT:
     def __init__(self, script):
         self.script = list(script)  # Transcript or Exception instances
         self.calls = 0
+        self.languages = []
 
-    def transcribe(self, samples, sr=16000):
+    def transcribe(self, samples, sr=16000, language="auto"):
         self.calls += 1
+        self.languages.append(language)
         item = self.script.pop(0)
         if isinstance(item, Exception):
             raise item
@@ -1178,3 +1180,44 @@ def test_a_failing_angle_pick_still_answers(monkeypatch):
     assert p["llm"].angles == [None]
     assert p["tts"].calls == [("Thou art fairest.", "en")]
     assert ctl.state == State.LISTENING
+
+
+# ivrit-ai's Hebrew Whisper sometimes writes English speech in Hebrew letters
+# ("מירר מירר"): the segment is transcribed again as English.
+def test_english_wake_in_hebrew_letters_is_retranscribed_as_english():
+    ctl, p, _ = make([Transcript("מירר מירר, וואט דאז דה פיוצ'ר הולד?", "he"),
+                      Transcript("Mirror, mirror, what does the future hold?", "en")])
+    ctl.on_segment(SEG)
+    assert p["stt"].languages == ["auto", "en"]
+    assert p["llm"].calls == [([], "what does the future hold", "en")]
+
+
+def test_retranscription_that_is_not_english_keeps_the_original():
+    ctl, p, _ = make([Transcript("מירר מירר, מה צופן העתיד?", "he"),
+                      Transcript("מירר מירר, מה צופן העתיד?", "he")])
+    ctl.on_segment(SEG)
+    assert p["llm"].calls == [([], "מה צופן העתיד", "he")]
+
+
+def test_hebrew_wake_is_not_retranscribed():
+    ctl, p, _ = make([Transcript("מראה מראה, מה צופן העתיד?", "he")])
+    ctl.on_segment(SEG)
+    assert p["stt"].languages == ["auto"]
+
+
+def test_followup_in_hebrew_letters_after_an_english_wake_is_retried_as_english():
+    ctl, p, _ = make([Transcript("Mirror, mirror, who is fairest?", "en"),
+                      Transcript("טל מי מור", "he"),
+                      Transcript("Tell me more.", "en")])
+    ctl.on_segment(SEG)
+    ctl.on_segment(SEG)
+    assert p["stt"].languages == ["auto", "auto", "en"]
+    assert p["llm"].calls[-1][1:] == ("Tell me more.", "en")
+
+
+def test_hebrew_followup_after_a_hebrew_wake_is_not_retried():
+    ctl, p, _ = make([Transcript("מראה מראה, מי היפה?", "he"),
+                      Transcript("ספר לי עוד", "he")])
+    ctl.on_segment(SEG)
+    ctl.on_segment(SEG)
+    assert p["stt"].languages == ["auto", "auto"]

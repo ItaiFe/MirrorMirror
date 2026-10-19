@@ -11,6 +11,8 @@ prefer_alsa_plug = true     # several matches: prefer plughw/pulse/default over 
 stt_url = "http://127.0.0.1:8081"
 llm_url = "http://127.0.0.1:8080"
 timeout_s = 20
+stt_language = "he"   # "he": no language detection (~0.6 s faster); "auto" detects. An English
+                      # "Mirror, mirror" is re-read as English either way
 
 [tts]
 piper_voice_en = "/home/mirror/mirror-models/en_US-lessac-medium.onnx"

@@ -222,9 +222,9 @@ class TimedSTT:
         self._stt = stt
         self.calls: list[dict] = []
 
-    def transcribe(self, samples, sr: int = 16000):
+    def transcribe(self, samples, sr: int = 16000, language=None):
         t0 = time.monotonic()
-        tr = self._stt.transcribe(samples, sr)
+        tr = self._stt.transcribe(samples, sr, language=language)
         dt = time.monotonic() - t0
         self.calls.append({"seconds": round(dt, 3), "text": tr.text, "lang": tr.lang})
         log.info("STT %.2f s: (%s) %r", dt, tr.lang, tr.text)
@@ -376,7 +376,8 @@ def cmd_record(args) -> None:
 
     vad = SileroVad(os.path.join(os.path.abspath(cfg.models_dir), "silero_vad.onnx"))
     segmenter = Segmenter(vad, frame_samples=CHUNK, sample_rate=cfg.audio.sample_rate)
-    stt = TimedSTT(WhisperServerSTT(cfg.servers.stt_url, cfg.servers.timeout_s))
+    stt = TimedSTT(WhisperServerSTT(cfg.servers.stt_url, cfg.servers.timeout_s,
+                                    cfg.servers.stt_language))
     world = load_world(resolve_repo_path(cfg.conversation.world_file, args.config))
     llm = TimedLLM(LlamaServerLLM(cfg.servers.llm_url, cfg.servers.timeout_s,
                                   cfg.conversation.max_reply_sentences,

@@ -23,6 +23,7 @@ _NIQQUD_RE = re.compile("[֑-ׇ]")
 @dataclass
 class WakeMatch:
     remainder: str
+    english: bool = False  # "mirror" in Latin or in Hebrew letters ("מירר"), not "מראה"
 
 
 def normalize(text: str) -> str:
@@ -66,4 +67,5 @@ def match_wake(text: str) -> "WakeMatch | None":
         if len(rest) >= n and all(_close(t, w) for t, w in zip(rest[:n], tail)):
             rest = rest[n:]
             break
-    return WakeMatch(remainder=" ".join(rest))
+    english = tokens[0] in _TRANSLITERATED_MIRROR or tokens[0].isascii()
+    return WakeMatch(remainder=" ".join(rest), english=english)

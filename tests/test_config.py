@@ -116,3 +116,11 @@ def test_mist_is_read_from_toml(tmp_path):
 def test_mist_out_of_range(kwargs):
     with pytest.raises(ValueError, match="face.mist_"):
         FaceConfig(**kwargs)
+
+
+def test_stt_language_defaults_auto_and_is_hebrew_in_the_shipped_configs():
+    from mirror.config import ServersConfig
+
+    assert ServersConfig().stt_language == "auto"
+    for name in ("config/mac.toml", "config/orin.toml"):
+        assert load_config(name).servers.stt_language == "he", name

@@ -185,3 +185,24 @@ def test_stt_model_defaults_to_ivrit_turbo():
                      _repo_file("Makefile"), re.MULTILINE)
     unit = _repo_file("deploy", "systemd", "mirror-stt.service")
     assert "Environment=STT_MODEL=ivrit-turbo-q5_0.bin" in unit
+
+
+@responses.activate
+def test_language_is_sent_auto_or_forced():
+    responses.post(URL + "/inference", json={"text": "Mirror, mirror", "language": "en"})
+    make().transcribe(SAMPLES)
+    make().transcribe(SAMPLES, language="en")
+    bodies = [c.request.body for c in responses.calls]
+    assert b'name="language"\r\n\r\nauto' in bodies[0]
+    assert b'name="language"\r\n\r\nen' in bodies[1]
+
+
+@responses.activate
+def test_default_language_comes_from_the_constructor():
+    responses.post(URL + "/inference", json={"text": "מראה מראה", "language": "he"})
+    stt = WhisperServerSTT(URL, timeout_s=2.0, language="he")
+    stt.transcribe(SAMPLES)
+    stt.transcribe(SAMPLES, language="en")  # the English retry overrides it
+    bodies = [c.request.body for c in responses.calls]
+    assert b'name="language"\r\n\r\nhe' in bodies[0]
+    assert b'name="language"\r\n\r\nen' in bodies[1]

@@ -23,6 +23,9 @@ class ServersConfig:
     stt_url: str = "http://127.0.0.1:8081"
     llm_url: str = "http://127.0.0.1:8080"
     timeout_s: float = 20
+    # whisper-server's language: "auto" detects it (~0.6 s more per request on an M2);
+    # "he" skips that (most visitors speak Hebrew; an English wake is re-read as English)
+    stt_language: str = "auto"
 
 
 @dataclass

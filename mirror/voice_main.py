@@ -402,7 +402,8 @@ def run(cfg: Config, wav_path=None, config_path=None) -> int:
 
         vad = SileroVad(os.path.join(models_dir, "silero_vad.onnx"))
         segmenter = Segmenter(vad, frame_samples=CHUNK, sample_rate=cfg.audio.sample_rate)
-        stt = WhisperServerSTT(cfg.servers.stt_url, cfg.servers.timeout_s)
+        stt = WhisperServerSTT(cfg.servers.stt_url, cfg.servers.timeout_s,
+                               cfg.servers.stt_language)
         world = load_world(resolve_repo_path(cfg.conversation.world_file, config_path))
         llm = LlamaServerLLM(cfg.servers.llm_url, cfg.servers.timeout_s,
                              cfg.conversation.max_reply_sentences,

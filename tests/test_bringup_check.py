@@ -236,7 +236,7 @@ class FakeSegmenter:
 
 
 class FakeSTT:
-    def transcribe(self, samples, sr=16000):
+    def transcribe(self, samples, sr=16000, language="auto"):
         return Transcript("Mirror, mirror on the wall, what do you see?", "en")
 
 
