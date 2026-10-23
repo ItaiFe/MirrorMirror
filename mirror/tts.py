@@ -544,10 +544,13 @@ def _whisper(audio: np.ndarray, sr: int, amount: float) -> np.ndarray:
     env = np.exp(np.fft.rfft(cep, axis=1).real)
     freqs = np.fft.rfftfreq(size, 1 / sr)
     env *= freqs / (freqs + _WHISPER_LOW_HZ)
-    phase = np.random.default_rng(0).uniform(0, 2 * np.pi, env.shape)
-    noise = env * np.exp(1j * phase)
+    # one continuous white noise, framed like the voice and shaped by its envelope:
+    # frames of independent random phase interfere where they overlap, and that
+    # sounds metallic
+    white = np.random.default_rng(0).standard_normal(len(padded)).astype(np.float32)
+    noise = np.fft.rfft(white[idx] * win, axis=1) * env
     # each frame's noise carries that frame's energy, so pauses stay silent
-    gain = np.sqrt(power.sum(axis=1) / np.maximum((env ** 2).sum(axis=1), 1e-20))
+    gain = np.sqrt(power.sum(axis=1) / np.maximum((np.abs(noise) ** 2).sum(axis=1), 1e-20))
     noise *= gain[:, None]
     out = np.zeros_like(padded)
     norm = np.zeros_like(padded)
