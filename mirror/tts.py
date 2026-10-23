@@ -177,6 +177,16 @@ HEBREW_VOICE_SYMBOLS = frozenset("abdefhijklmnopstuvwzɡʁʃʒʔχˈ") | frozens
 # Filler interjections are sounds, not words: RenikudPlus would vowelize them
 # ("הממ" -> "hamamˈa"). Its force lexicon always wins where a token matches.
 RENIKUD_LEXICON = {"הממ": "hmm", "מממ": "mmm", "ממ": "mm", "אהה": "ʔahˈa"}
+# The oracle is the mirror: מראה is always מַרְאָה (mar'á), which RenikudPlus often
+# reads as מַרְאֶה ("appearance", "shows"), the wake phrase included. Entries match
+# whole tokens, so each prefixed form is listed. The cost: the verb "shows" is read
+# as "mirror" too.
+RENIKUD_LEXICON |= {
+    prefix + "מראה": ipa + "maʁʔˈa"
+    for prefix, ipa in [("", ""), ("ה", "ha"), ("ב", "ba"), ("ל", "la"), ("כ", "ka"),
+                        ("מה", "meha"), ("ו", "u"), ("וה", "veha"), ("וב", "uva"),
+                        ("ש", "ʃe"), ("שה", "ʃeha"), ("שב", "ʃeba"), ("כש", "keʃe")]
+}
 
 _JOINER = re.compile(r"(?<=\S)[-\u05be](?=\S)")  # hyphen/maqaf inside a word
 _PAUSE = re.compile(r"[-\u05be\u2013\u2014\u2026:;]")  # dashes, ellipsis, : ; -> a comma

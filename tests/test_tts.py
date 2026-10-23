@@ -370,6 +370,15 @@ def test_renikud_g2p_reads_interjections_as_sounds(monkeypatch):
     assert lexicon["הממ"] == "hmm" and lexicon["מממ"] == "mmm"
 
 
+def test_renikud_lexicon_reads_the_mirror_as_mara():
+    from mirror.tts import RENIKUD_LEXICON
+
+    # מַרְאָה (mirror), never מַרְאֶה ("appearance", "shows"); the force lexicon
+    # matches whole tokens, so each prefixed form needs its own entry
+    for word in ["מראה", "המראה", "במראה", "למראה", "והמראה", "שבמראה", "מהמראה"]:
+        assert RENIKUD_LEXICON[word].endswith("maʁʔˈa"), word
+
+
 @pytest.mark.parametrize("raw, mapped", [
     ("mmm… zˈo", "mmm, zˈo"),                     # ellipsis: a pause
     ("talˈuj balˈev – bivχiʁˈa", "talˈuj balˈev, bivχiʁˈa"),  # dashes: a pause
@@ -398,6 +407,22 @@ def test_hebrew_voice_uses_the_given_g2p(monkeypatch):
     tts._g2p = G2P()
     assert tts.phonemes("שלום") == "ba"
     assert calls["g2p"] == "שלום" and "diacritize" not in calls
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("line, want", [
+    ("מראה, מראה שעל הקיר", "maʁʔˈa, maʁʔˈa ʃeʔˈal hakˈiʁ"),
+    ("אני המראה.", "ʔanˈi hamaʁʔˈa."),
+    ("המראה שלי", "hamaʁʔˈa ʃelˈi"),
+    ("שאלו, והמראה תענה.", "ʃaʔalˈu, vehamaʁʔˈa taʔanˈe."),
+])
+def test_renikud_real_mirror_is_mara(line, want):
+    pytest.importorskip("renikud_onnx")
+    if not RENIKUD_MODEL.exists():
+        pytest.skip("renikud model missing")
+    from mirror.tts import RenikudG2P
+
+    assert RenikudG2P(str(RENIKUD_MODEL)).phonemize(line) == want
 
 
 @pytest.mark.slow
