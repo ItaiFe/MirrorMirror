@@ -96,6 +96,11 @@ setup() {
         .venv/bin/pip install -q scikit-build cmake ninja
         ./build_monotonic_align.sh
         .venv/bin/python setup.py build_ext --inplace
+        # torch >= 2.9 exports with dynamo (needs onnxscript, and gives a different
+        # graph); the TorchScript exporter makes the same graph as the shipped voice.
+        grep -q 'dynamo=False' src/piper/train/export_onnx.py ||
+            sed -i 's/^        verbose=False,$/        verbose=False,\n        dynamo=False,/' \
+                src/piper/train/export_onnx.py
     )
     "$PY" -c "import torch; assert torch.cuda.is_available(), 'torch has no CUDA'; \
 print('torch', torch.__version__, torch.cuda.get_device_name(0))"
