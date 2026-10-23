@@ -328,7 +328,8 @@ def build_tts(tts_cfg: TtsConfig):
 
     if tts_cfg.engine not in ("piper", "pocket"):
         raise ValueError(f"unknown tts.engine {tts_cfg.engine!r} (piper | pocket)")
-    _effect = {"voice_speed": tts_cfg.voice_speed, "voice_room": tts_cfg.voice_room}
+    _effect = {"voice_speed": tts_cfg.voice_speed, "voice_room": tts_cfg.voice_room,
+               "voice_whisper": tts_cfg.voice_whisper}
     if tts_cfg.engine == "pocket":
         try:
             g2p = tts.RenikudG2P(tts_cfg.renikud_model)

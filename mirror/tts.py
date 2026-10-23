@@ -516,19 +516,61 @@ _ROOM_ECHOES = ((37, 0.28), (53, 0.22), (71, 0.16), (97, 0.11))
 _EFFECT_PEAK = 0.9
 
 
+_WHISPER_LIFTER_S = 0.0015  # cepstral cutoff: below the pitch period of any voice
+_WHISPER_LOW_HZ = 250.0     # whispers have no voiced low end: the noise rolls off below
+
+
+def _whisper(audio: np.ndarray, sr: int, amount: float) -> np.ndarray:
+    """Whisperize: each ~46 ms frame keeps its spectral envelope (the vocal tract, so
+    the vowels and consonants) and loses its pitch, which becomes shaped noise of the
+    same energy. `amount` mixes it with the dry voice (0 = dry, 1 = a full whisper).
+    Same length; seeded, so a line always whispers the same way."""
+    n = len(audio)
+    if amount <= 0.0 or n == 0:
+        return audio
+    size = 1 << int(np.ceil(np.log2(0.046 * sr)))
+    hop = size // 4
+    frames = 1 + max(0, -(-(n - size) // hop))
+    padded = np.zeros((frames - 1) * hop + size, np.float32)
+    padded[:n] = audio
+    win = np.hanning(size).astype(np.float32)
+    idx = np.arange(size)[None, :] + hop * np.arange(frames)[:, None]
+    spec = np.fft.rfft(padded[idx] * win, axis=1)
+    power = np.abs(spec) ** 2
+    # the envelope: low quefrencies of the log spectrum (the vocal tract, not the pitch)
+    cep = np.fft.irfft(np.log(np.abs(spec) + 1e-7), n=size, axis=1)
+    lift = max(2, int(sr * _WHISPER_LIFTER_S))
+    cep[:, lift:size - lift + 1] = 0.0
+    env = np.exp(np.fft.rfft(cep, axis=1).real)
+    freqs = np.fft.rfftfreq(size, 1 / sr)
+    env *= freqs / (freqs + _WHISPER_LOW_HZ)
+    phase = np.random.default_rng(0).uniform(0, 2 * np.pi, env.shape)
+    noise = env * np.exp(1j * phase)
+    # each frame's noise carries that frame's energy, so pauses stay silent
+    gain = np.sqrt(power.sum(axis=1) / np.maximum((env ** 2).sum(axis=1), 1e-20))
+    noise *= gain[:, None]
+    out = np.zeros_like(padded)
+    norm = np.zeros_like(padded)
+    np.add.at(out, idx, np.fft.irfft(noise, n=size, axis=1).astype(np.float32) * win)
+    np.add.at(norm, idx, np.broadcast_to(win ** 2, idx.shape))
+    wet = (out / np.maximum(norm, 1e-3))[:n]
+    return ((1.0 - amount) * audio + amount * wet).astype(np.float32)
+
+
 def voice_effect(audio: np.ndarray, sr: int, track: VisemeTrack | None,
-                 speed: float = 1.0, room: float = 0.0
+                 speed: float = 1.0, room: float = 0.0, whisper: float = 0.0
                  ) -> tuple[np.ndarray, VisemeTrack | None]:
-    """The "villain" voice: resample so playback runs at `speed` (deeper and slower
-    below 1), add a few decaying room echoes, peak-normalize. The viseme track is
-    stretched by 1/speed to stay in sync. Off (speed 1, room 0) returns the inputs."""
-    if speed == 1.0 and room == 0.0:
+    """The character voice: whisperize (see `_whisper`), resample so playback runs at
+    `speed` (deeper and slower below 1), add a few decaying room echoes,
+    peak-normalize. The viseme track is stretched by 1/speed to stay in sync. Off
+    (speed 1, room 0, whisper 0) returns the inputs."""
+    if speed == 1.0 and room == 0.0 and whisper == 0.0:
         return audio, track
-    out = audio
+    out = _whisper(audio, sr, whisper)
     if speed != 1.0:
-        n = int(len(audio) / speed)
-        out = np.interp(np.linspace(0, len(audio) - 1, n), np.arange(len(audio)),
-                        audio).astype(np.float32) if len(audio) else audio[:0]
+        n = int(len(out) / speed)
+        out = np.interp(np.linspace(0, len(out) - 1, n), np.arange(len(out)),
+                        out).astype(np.float32) if len(out) else out[:0]
         if track is not None:
             track = VisemeTrack(track.times / speed, list(track.shapes), track.end / speed)
     if room > 0.0:
@@ -546,14 +588,16 @@ def voice_effect(audio: np.ndarray, sr: int, track: VisemeTrack | None,
 
 class TTSRouter:
     def __init__(self, en: Synth, he: Synth, voice_speed: float = 1.0,
-                 voice_room: float = 0.0):
+                 voice_room: float = 0.0, voice_whisper: float = 0.0):
         self._en = en
         self._he = he
         self._voice_speed = voice_speed  # voice_effect, on every line in both languages
         self._voice_room = voice_room
+        self._voice_whisper = voice_whisper
 
     def _effect(self, audio, rate, track):
-        return voice_effect(audio, rate, track, self._voice_speed, self._voice_room)
+        return voice_effect(audio, rate, track, self._voice_speed, self._voice_room,
+                            self._voice_whisper)
 
     def synth(self, text: str, lang: str) -> tuple[np.ndarray, int]:
         engine = self._he if lang == "he" else self._en

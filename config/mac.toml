@@ -26,6 +26,7 @@ pocket_voice_file = "models/voices/mirror.npy"   # the oracle's voice (README: P
 pocket_threads = 4         # CPU threads for the voice (4: ~20% faster than 2 on an M2; the Orin has 6 cores)
 voice_speed = 1.0        # < 1 = deeper and slower (0.86 = the "villain" sample); 1.0 = off
 voice_room = 0.0         # 0..1 small-room echo (1.0 = the "villain" sample); 0 = off
+voice_whisper = 0.0      # 0..1 whisper (the pitch becomes breath); 1.0 = a full whisper, 0 = off
 
 [face]
 size = 252

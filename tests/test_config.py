@@ -124,3 +124,13 @@ def test_stt_language_defaults_auto_and_is_hebrew_in_the_shipped_configs():
     assert ServersConfig().stt_language == "auto"
     for name in ("config/mac.toml", "config/orin.toml"):
         assert load_config(name).servers.stt_language == "he", name
+
+
+def test_voice_whisper_defaults_off_and_is_validated(tmp_path):
+    assert TtsConfig().voice_whisper == 0.0
+    p = tmp_path / "c.toml"
+    p.write_text("[tts]\nvoice_whisper = 0.7\n")
+    assert load_config(str(p)).tts.voice_whisper == 0.7
+    for bad in (-0.1, 1.5):
+        with pytest.raises(ValueError, match="voice_whisper"):
+            TtsConfig(voice_whisper=bad)

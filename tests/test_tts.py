@@ -861,3 +861,81 @@ def test_pocket_frees_blobs_it_never_uses(tmp_path, monkeypatch):
     np.save(f, np.zeros((1, 2, 3), np.float32))
     PocketTTS("m.onnx", voice_file=str(f))
     assert record["model"]._encoder_blob is None and record["model"]._voice_blobs == {}
+
+
+# --- whisper ---------------------------------------------------------------------
+
+def _tonality(audio, sr):
+    """Peak-to-median magnitude ratio of the spectrum: high for a pitched tone, low
+    for noise."""
+    spectrum = np.abs(np.fft.rfft(audio))
+    return float(spectrum.max() / (np.median(spectrum) + 1e-9))
+
+
+def _vowel(seconds, sr=22050, f0=140):
+    """A crude voiced vowel: a decaying harmonic stack on f0."""
+    t = np.arange(int(sr * seconds)) / sr
+    a = sum(np.sin(2 * np.pi * f0 * k * t) / k for k in range(1, 30))
+    return (0.3 * a / np.abs(a).max()).astype(np.float32)
+
+
+def test_whisper_removes_the_pitch():
+    from mirror.tts import voice_effect
+
+    sr = 22050
+    a = _vowel(1.0, sr)
+    out, _ = voice_effect(a, sr, None, whisper=1.0)
+    assert len(out) == len(a) and out.dtype == np.float32
+    assert _tonality(out, sr) < _tonality(a, sr) / 20
+
+
+def test_whisper_keeps_the_spectral_envelope():
+    from mirror.tts import voice_effect
+
+    sr = 22050
+    t = np.arange(sr) / sr
+    low = (0.3 * np.sin(2 * np.pi * 300 * t)).astype(np.float32)
+    out, _ = voice_effect(low, sr, None, whisper=1.0)
+    f = np.fft.rfftfreq(len(out), 1 / sr)
+    s = np.abs(np.fft.rfft(out)) ** 2
+    # a low sound stays a low sound: most of the noise energy is under 1.5 kHz
+    assert s[f < 1500].sum() > 4 * s[f >= 1500].sum()
+
+
+def test_whisper_keeps_pauses_quiet():
+    from mirror.tts import voice_effect
+
+    sr = 22050
+    a = np.concatenate([_vowel(0.5, sr), np.zeros(sr // 2, np.float32)])
+    out, _ = voice_effect(a, sr, None, whisper=1.0)
+    rms = lambda x: float(np.sqrt(np.mean(x ** 2)))
+    assert rms(out[-sr // 4:]) < rms(out[: sr // 4]) / 100
+
+
+def test_whisper_is_deterministic_and_leaves_the_track_alone():
+    from mirror.tts import voice_effect
+
+    a = _vowel(0.5)
+    track = VisemeTrack(np.array([0.0, 0.2]), ["A", "D"], end=0.4)
+    out1, t = voice_effect(a, 22050, track, whisper=0.7)
+    out2, _ = voice_effect(a, 22050, track, whisper=0.7)
+    assert np.array_equal(out1, out2) and t is track
+
+
+def test_whisper_partial_keeps_some_voice():
+    from mirror.tts import voice_effect
+
+    sr = 22050
+    a = _vowel(1.0, sr)
+    full, _ = voice_effect(a, sr, None, whisper=1.0)
+    half, _ = voice_effect(a, sr, None, whisper=0.5)
+    assert _tonality(full, sr) < _tonality(half, sr) < _tonality(a, sr)
+
+
+@pytest.mark.parametrize("audio", [np.zeros(0, np.float32), np.zeros(1000, np.float32),
+                                   np.full(100, 0.1, np.float32)])
+def test_whisper_empty_silent_or_short_audio(audio):
+    from mirror.tts import voice_effect
+
+    out, _ = voice_effect(audio, 22050, None, whisper=1.0)
+    assert len(out) == len(audio) and np.all(np.isfinite(out))

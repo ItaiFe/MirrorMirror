@@ -47,15 +47,19 @@ class TtsConfig:
     pocket_threads: int = 2
     # the "villain" character effect on every spoken line (answers, fillers, lures):
     # voice_speed < 1 resamples deeper and slower (1.0 = off), voice_room scales a
-    # small-room echo (0 = off). The "villain" sample: 0.86 and 1.0.
+    # small-room echo (0 = off). The "villain" sample: 0.86 and 1.0. voice_whisper
+    # mixes in a whisper (the pitch becomes breath; 0 = off, 1 = a full whisper).
     voice_speed: float = 1.0
     voice_room: float = 0.0
+    voice_whisper: float = 0.0
 
     def __post_init__(self):
         if not 0.6 <= self.voice_speed <= 1.2:
             raise ValueError(f"tts.voice_speed must be 0.6..1.2, got {self.voice_speed!r}")
         if not 0.0 <= self.voice_room <= 1.0:
             raise ValueError(f"tts.voice_room must be 0..1, got {self.voice_room!r}")
+        if not 0.0 <= self.voice_whisper <= 1.0:
+            raise ValueError(f"tts.voice_whisper must be 0..1, got {self.voice_whisper!r}")
 
 
 @dataclass

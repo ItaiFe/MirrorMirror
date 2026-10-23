@@ -453,9 +453,11 @@ def test_build_tts_passes_the_voice_effect(monkeypatch, engine):
 
     _stub_piper_stack(monkeypatch)
     monkeypatch.setattr(mirror.tts, "PocketTTS", FakePocket)
-    router, _, got = build_tts(TtsConfig(engine=engine, voice_speed=0.86, voice_room=0.5))
+    router, _, got = build_tts(TtsConfig(engine=engine, voice_speed=0.86, voice_room=0.5,
+                                         voice_whisper=0.6))
     assert got == engine
     assert router._voice_speed == 0.86 and router._voice_room == 0.5
+    assert router._voice_whisper == 0.6
 
 
 def test_build_tts_pocket_passes_its_settings(monkeypatch):
