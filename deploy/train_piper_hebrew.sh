@@ -46,6 +46,8 @@ MAX_EPOCHS="${MAX_EPOCHS:-1000}"               # an upper bound: stop earlier by
 VAL_EVERY="${VAL_EVERY:-10}"                   # validation (+ tensorboard audio) every N epochs
 VALIDATION_SPLIT="${VALIDATION_SPLIT:-0.05}"   # ~60 of ~1,200 clips
 NUM_WORKERS="${NUM_WORKERS:-4}"
+TORCH_VERSION="${TORCH_VERSION:-2.11.*}"       # torch + torchaudio pair (see setup)
+TORCH_CUDA="${TORCH_CUDA:-cu130}"              # wheel index: cu130 needs a CUDA 13 driver; cu128 otherwise
 PY="$WORK/piper1-gpl/.venv/bin/python"
 # --------------------------------------------------------------------------------------
 
@@ -83,6 +85,12 @@ setup() {
         #   .venv/bin/pip install torch --index-url https://download.pytorch.org/whl/cu124
         .venv/bin/pip install -q --upgrade pip wheel setuptools
         .venv/bin/pip install -q -e '.[train]'
+        # The UTMOS predictor (val_mos) needs torchaudio, and v1.8.0's val_mos
+        # ModelCheckpoint makes Lightning 2.6 raise at the first validation without it
+        # (piper's comment says it only warns). torchaudio stopped at 2.11, so pin
+        # torch to the matching pair (seen 2026-10-23: pip had pulled torch 2.14).
+        .venv/bin/pip install -q "torch==$TORCH_VERSION" "torchaudio==$TORCH_VERSION" \
+            --index-url "https://download.pytorch.org/whl/$TORCH_CUDA"
         # The monotonic alignment Cython extension (docs/TRAINING.md), plus the in-repo
         # dev build of the package's C extension.
         .venv/bin/pip install -q scikit-build cmake ninja
