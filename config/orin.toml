@@ -20,10 +20,10 @@ he_engine = "phonikud"   # "phonikud" (a G2P + the Phonikud Piper voice) | "mms"
 he_g2p = "renikud"       # the voice's text->IPA stage: "renikud" (RenikudPlus) | "phonikud"
 renikud_model = "/home/mirror/mirror-models/renikud-plus.int8.onnx"
 phonikud_model = "/home/mirror/mirror-models/phonikud-1.0.int8.onnx"
-phonikud_voice_he = "/home/mirror/mirror-models/phonikud-tts-he.onnx"   # config: same path + ".json"
+phonikud_voice_he = "/home/mirror/mirror-models/he_IL-oracle-medium.onnx"   # the oracle (fine-tuned Phonikud, docs/HEBREW_VOICE_TRAINING.md); config: same path + ".json"
 mms_model_he = "facebook/mms-tts-heb"
-engine = "pocket"         # "piper" | "pocket" (Pocket TTS for both languages: the oracle's cloned voice;
-                          # missing voice file or model -> Piper, with a WARNING; README memory cut f)
+engine = "piper"          # "piper" (the oracle in Hebrew, lessac in English; no Pocket loaded, ~0.6 GB saved)
+                          # | "pocket" (Pocket TTS for both languages: the cloned voice; missing file -> Piper, WARNING)
 pocket_model = "/home/mirror/mirror-models/pocket-tts-english-ipa.onnx"
 pocket_voice = "javert"   # built in: javert (CC0, deepest), michael (CC-BY), marius (CC0), ...
 pocket_voice_file = "/home/mirror/mirror-models/mirror-voice.npy"   # the oracle's cloned voice (README: Pocket TTS)

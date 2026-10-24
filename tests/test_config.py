@@ -16,7 +16,7 @@ def test_load_mac_config():
     assert c.tts.phonikud_model == "models/phonikud-1.0.int8.onnx"
     assert c.tts.he_g2p == DEFAULT_G2P
     assert c.tts.renikud_model == "models/renikud-plus.int8.onnx"
-    assert c.tts.phonikud_voice_he == "models/phonikud-tts-he.onnx"
+    assert c.tts.phonikud_voice_he == "models/he_IL-oracle-medium.onnx"
     assert c.face.renderer == "sprite" and c.face.bank == "assets/face/stub"
 
 
@@ -26,7 +26,7 @@ def test_load_orin_config():
     assert c.lights.kind == "wled" and c.lights.serial_port == "/dev/ttyUSB0"
     assert c.models_dir == "/home/mirror/mirror-models"
     assert c.tts.he_engine == "phonikud"
-    assert c.tts.phonikud_voice_he == "/home/mirror/mirror-models/phonikud-tts-he.onnx"
+    assert c.tts.phonikud_voice_he == "/home/mirror/mirror-models/he_IL-oracle-medium.onnx"
     assert c.tts.he_g2p == DEFAULT_G2P
     assert c.tts.renikud_model == "/home/mirror/mirror-models/renikud-plus.int8.onnx"
     assert c.face.renderer == "sprite" and c.face.bank == "assets/face/stub"
@@ -45,10 +45,11 @@ def test_tts_engine_defaults_to_piper_with_pocket_off():
     assert t.pocket_threads == 2
 
 
-def test_shipped_configs_use_the_cloned_pocket_voice():
+def test_shipped_configs_speak_piper_with_pocket_kept_for_a_switch_back():
     mac, orin = load_config("config/mac.toml").tts, load_config("config/orin.toml").tts
-    # both speak in the oracle's cloned voice
-    assert mac.engine == orin.engine == "pocket"
+    # Piper (the trained oracle in Hebrew) saves Pocket's ~0.6 GB on the Orin;
+    # the Pocket settings stay so engine = "pocket" switches straight back
+    assert mac.engine == orin.engine == "piper"
     assert mac.pocket_voice_file == "models/voices/mirror.npy"
     assert orin.pocket_voice_file == "/home/mirror/mirror-models/mirror-voice.npy"
     assert mac.pocket_model == "models/pocket-tts-english-ipa.onnx"

@@ -82,6 +82,7 @@ MIN_SIZES = {
     "silero_vad.onnx": 1_000_000,
     "en_US-lessac-medium.onnx": 30_000_000,
     "phonikud-tts-he.onnx": 30_000_000,
+    "he_IL-oracle-medium.onnx": 30_000_000,
     "phonikud-1.0.int8.onnx": 100_000_000,
     "renikud-plus.int8.onnx": 100_000_000,
     "pocket-tts-english-ipa.onnx": 100_000_000,
