@@ -122,6 +122,25 @@ class ConversationConfig:
 
 
 @dataclass
+class AmbientConfig:
+    """Background music under the oracle (mirror/ambient.py). Levels in dB:
+    volume_db on the file as mastered, the other two relative to it."""
+    enabled: bool = False
+    file: str = "models/ambient_loop.wav"  # 16-bit WAV, looped; relative to the repo
+    volume_db: float = -12.0     # idle: clearly present
+    listening_db: float = -10.0  # after the wake phrase, so the mic hears the visitor
+    answering_db: float = -24.0  # thinking and speaking: barely there
+    fade_s: float = 1.5          # each level change fades over this long
+    quiet_hours: list = field(default_factory=list)  # "HH:MM-HH:MM": silent
+
+    def __post_init__(self):
+        if self.fade_s <= 0:
+            raise ValueError(f"ambient.fade_s must be > 0 (got {self.fade_s})")
+        if self.volume_db > 0:
+            raise ValueError(f"ambient.volume_db must be <= 0 dB (got {self.volume_db})")
+
+
+@dataclass
 class LlmConfig:
     """Sampling sent with every llama-server request: a high temperature and
     repetition penalties keep the oracle's answers from all sounding alike."""
@@ -145,6 +164,7 @@ class Config:
     lights: LightsConfig = field(default_factory=LightsConfig)
     conversation: ConversationConfig = field(default_factory=ConversationConfig)
     llm: LlmConfig = field(default_factory=LlmConfig)
+    ambient: AmbientConfig = field(default_factory=AmbientConfig)
     models_dir: str = "models"  # silero_vad.onnx and the Hugging Face cache (hf/)
 
 

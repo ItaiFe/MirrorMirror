@@ -26,6 +26,7 @@ CHUNK = 512  # ~32 ms at 16 kHz, matches the VAD frame size
 WRITE_CHUNK_S = 0.05  # playback is written in short blocks so it can be stopped
 MIC_READ_TIMEOUT_S = 2.0  # no audio for this long: the mic has stalled
 PLAY_JOIN_GRACE_S = 2.0  # the writer may lag the clip's length by this much
+BED_JOIN_S = 1.0  # the ambient writer finishes its block within this when stopped
 
 log = logging.getLogger("mirror.audio")
 
@@ -246,14 +247,24 @@ class Player:
     opened at a format it supports: the clip's rate in mono if it can, else
     48 kHz / 16 kHz stereo or its default; clips are resampled (and duplicated
     to stereo) to match.
+
+    With an ambient bed (mirror/ambient.py) the stream never runs dry: a bed
+    thread writes the bed between clips, and a clip's writer mixes the bed under
+    the clip. One lock (_io) keeps the two from ever writing at the same time,
+    and the bed thread is stopped before the stream is closed or aborted.
     """
 
-    def __init__(self, device: Optional[int]):
+    def __init__(self, device: Optional[int], bed=None):
         self.device = device
         self._stream = None
         self._rate: Optional[int] = None  # the clip rate the stream was opened for
         self._out_rate: Optional[int] = None  # the device's rate
         self._channels = 1
+        self._bed = bed
+        self._io = threading.Lock()  # held around every stream.write
+        self._clip = threading.Event()  # set while a clip's writer owns the stream
+        self._bed_thread: Optional[threading.Thread] = None
+        self._bed_stop = threading.Event()
 
     def open(self, sr: int) -> None:
         """Open and start the output stream for clips at sr (a no-op if it already is)."""
@@ -266,11 +277,56 @@ class Player:
                                 [(sr, 1), (48000, 2), (16000, 2)])
         stream = sd.OutputStream(samplerate=rate, device=self.device, channels=ch,
                                  dtype="float32")
+        if self._bed is not None:
+            self._bed.prepare(rate)
         stream.start()
         self._stream, self._rate, self._out_rate, self._channels = stream, sr, rate, ch
         log.info("audio output open: %d Hz x %d ch (clips at %d Hz)", rate, ch, sr)
+        if self._bed is not None:
+            self._start_bed(stream)
+
+    def _start_bed(self, stream) -> None:
+        stop = threading.Event()
+        thread = threading.Thread(target=self._bed_loop, args=(stream, stop),
+                                  name="ambient", daemon=True)
+        self._bed_thread, self._bed_stop = thread, stop
+        thread.start()
+
+    def _bed_loop(self, stream, stop: threading.Event) -> None:
+        """Keep the output fed with the bed while no clip plays."""
+        rate, channels = self._out_rate, self._channels
+        chunk = max(1, int(rate * WRITE_CHUNK_S))
+        while not stop.is_set():
+            if self._clip.is_set():
+                stop.wait(0.005)
+                continue
+            with self._io:
+                if stop.is_set() or self._clip.is_set():
+                    continue
+                block = self._bed.render(chunk, rate)
+                try:
+                    stream.write(_to_channels(block, channels))
+                except Exception as e:  # noqa: BLE001 - the next clip reopens the stream
+                    log.warning("ambient write failed (%s: %s); background music paused",
+                                type(e).__name__, e)
+                    return
+
+    def _stop_bed(self) -> bool:
+        """Stop the bed thread; False if it is wedged inside a write."""
+        thread, self._bed_thread = self._bed_thread, None
+        if thread is None:
+            return True
+        self._bed_stop.set()
+        thread.join(BED_JOIN_S)
+        if thread.is_alive():
+            log.warning("ambient writer did not stop")
+            return False
+        return True
 
     def close(self) -> None:
+        if not self._stop_bed():  # never close a stream a write() is still inside
+            self._stream, self._rate = None, None
+            return
         if self._stream is not None:
             stream, self._stream, self._rate = self._stream, None, None
             try:
@@ -288,7 +344,7 @@ class Player:
         if self._stream is stream:
             self._stream, self._rate = None, None
         writer.join(timeout=1.0)
-        if writer.is_alive():  # never touch a stream a write() is still inside
+        if not self._stop_bed() or writer.is_alive():  # never touch a stream a write() is still inside
             # Known leak: the wedged stream stays open (it is already detached, so
             # the next play opens a fresh one) until the write returns or the
             # process exits.
@@ -307,6 +363,7 @@ class Player:
         hop_s = 0.02
         env = mouth_envelope(samples, sr, hop_s)  # on the clip's own timeline
         self.open(sr)
+        self._clip.set()  # the bed thread steps aside (its current block finishes first)
         stream = self._stream
         out_rate, channels = self._out_rate, self._channels
         errors: list[BaseException] = []
@@ -315,15 +372,23 @@ class Player:
         data = np.ascontiguousarray(np.repeat(mono.reshape(-1, 1), channels, axis=1))
         chunk = max(1, int(out_rate * WRITE_CHUNK_S))
         duration = len(samples) / sr
+        bed = self._bed
 
         def write() -> None:
             try:
                 for i in range(0, len(data), chunk):
                     if cancel.is_set():
                         return
-                    stream.write(data[i:i + chunk])
+                    block = data[i:i + chunk]
+                    with self._io:
+                        if bed is not None:
+                            block = np.clip(block + bed.render(len(block), out_rate)[:, None],
+                                            -1.0, 1.0).astype(np.float32)
+                        stream.write(block)
             except Exception as e:  # noqa: BLE001 - re-raised on the calling thread
                 errors.append(e)
+            finally:
+                self._clip.clear()  # the bed carries on straight after the clip
 
         writer = threading.Thread(target=write, name="player", daemon=True)
         writer.start()
@@ -353,3 +418,7 @@ class Player:
         if tail > 0:
             time.sleep(tail)
         on_level(0.0)
+
+
+def _to_channels(mono: np.ndarray, channels: int) -> np.ndarray:
+    return np.ascontiguousarray(np.repeat(mono.reshape(-1, 1), channels, axis=1))

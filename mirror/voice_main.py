@@ -22,6 +22,7 @@ import numpy as np
 from mirror import watchdog
 from mirror.audio import CHUNK, Mic, MicStalled, Player, find_device
 from mirror.bus import FaceBus
+from mirror.ambient import build_ambient
 from mirror.config import Config, TtsConfig, load_config, resolve_repo_path
 from mirror.conversation import Controller
 from mirror.fillers import FillerBank
@@ -78,10 +79,12 @@ def wav_tail_s(segmenter: Segmenter) -> float:
 
 
 class AnswerGate:
-    """Lights wrapper that tells the audio side when the mirror is answering."""
+    """Lights wrapper that tells the audio side when the mirror is answering
+    (and the ambient bed, if any, what state the mirror is in)."""
 
-    def __init__(self, lights):
+    def __init__(self, lights, ambient=None):
         self._lights = lights
+        self._ambient = ambient
         self.answering = threading.Event()  # set while THINKING/SPEAKING
         self.answered = threading.Event()   # set once an answer started; main clears it
 
@@ -91,6 +94,8 @@ class AnswerGate:
             self.answered.set()
         else:
             self.answering.clear()
+        if self._ambient is not None:
+            self._ambient.set_state(state)
         self._lights.set_state(state)
 
 
@@ -396,10 +401,11 @@ def run(cfg: Config, wav_path=None, config_path=None) -> int:
         face = FaceBus.sender(cfg.face.bus_port)
         raw_lights = (WledSerial(cfg.lights.serial_port, cfg.lights.baud)
                       if cfg.lights.kind == "wled" else LogLights())
+        bed = build_ambient(cfg.ambient, resolve_repo_path(cfg.ambient.file, config_path))
         output = Player(find_device(cfg.audio.output_device, "output",
-                                    cfg.audio.prefer_alsa_plug))
+                                    cfg.audio.prefer_alsa_plug), bed=bed)
         _push_idle(raw_lights, face)
-        gate = AnswerGate(raw_lights)
+        gate = AnswerGate(raw_lights, ambient=bed)
 
         vad = SileroVad(os.path.join(models_dir, "silero_vad.onnx"))
         segmenter = Segmenter(vad, frame_samples=CHUNK, sample_rate=cfg.audio.sample_rate)
