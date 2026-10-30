@@ -194,23 +194,9 @@ FALLBACK = {
     "he": "רגע, מאמי, הפאה שלי זזה. שאלו אותי שוב עוד רגע.",
 }
 
-# Spoken while the LLM thinks (natural ones, then sassy ones); each one is at most
-# ~2.5 s long.
+# Spoken while the LLM thinks: the diva's complaints; each one is at most ~3 s long.
 FILLERS: dict[str, list[str]] = {
     "en": [
-        "Mmmm… I think I understand what you want.",
-        "Well, well, well…",
-        "Hmm, let me see…",
-        "Ooh. Interesting…",
-        "Ahh, I know the answer to this one…",
-        "Mmm, give me a moment…",
-        "Hmm, now let me think…",
-        "Oh, that is a good one…",
-        "Well now…",
-        "Aha… yes, yes…",
-        "Hmm, curious. Very curious…",
-        "Let me see what I can see…",
-        # sassy ones
         "Honey, what is that wedgie…",
         "I can't handle this heat…",
         "Why did they stick me in the desert for a week…",
@@ -225,19 +211,6 @@ FILLERS: dict[str, list[str]] = {
         "Shh, I'm thinking. It takes a while…",
     ],
     "he": [
-        "מממ… אני חושבת שאני מבינה מה אתם רוצים.",
-        "טוב, טוב, טוב…",
-        "הממ, בואו נראה…",
-        "אוו. מעניין…",
-        "אהה, אני יודעת את התשובה…",
-        "מממ, תנו לי רגע…",
-        "הממ, רגע, אני חושבת…",
-        "או, זו שאלה טובה…",
-        "נו, נו…",
-        "אהה… כן, כן…",
-        "הממ, מסקרן. מאוד מסקרן…",
-        "בואו נראה מה אני רואה…",
-        # sassy ones
         "מאמי, מה זה הוודג' הזה…",
         "אין לי כוח לחום הזה…",
         "למה תקעו אותי לשבוע במדבר…",
