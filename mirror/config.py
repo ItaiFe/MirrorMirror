@@ -107,6 +107,7 @@ class LightsConfig:
 class ConversationConfig:
     listen_timeout_s: float = 8.0
     followup_s: float = 6.0
+    greeting_enabled: bool = False  # say persona.GREETING when woken
     max_reply_sentences: int = 3
     max_reply_chars: int = 300
     filler_enabled: bool = True     # speak a short filler line while the LLM thinks

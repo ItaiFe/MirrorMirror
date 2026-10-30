@@ -164,6 +164,12 @@ def angle_note(angle: Angle, lang: str) -> str:
     return _ANGLE_NOTE["he" if i else "en"].format(mode=MODES[angle.mode][i])
 
 
+# Said as soon as the wake word is heard, before anything else.
+GREETING = {
+    "en": "Hello, stranger.",
+    "he": "שלום, עובר אורח.",
+}
+
 FALLBACK = {
     "en": "Oops, my thoughts ran off to chase their own tail. Ask me again in a moment.",
     "he": "אופס, המחשבות שלי ברחו לרדוף אחרי הזנב. שאלו אותי שוב עוד רגע.",

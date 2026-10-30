@@ -1251,3 +1251,63 @@ def test_laugh_chance_zero_never_laughs():
 def test_laugh_chance_is_validated():
     with pytest.raises(ValueError):
         ConversationConfig(laugh_chance=1.5)
+
+
+# --- greeting and the follow-up window ----------------------------------------------
+
+GREET_CFG = dict(greeting_enabled=True, listen_timeout_s=60.0, followup_s=60.0)
+
+
+def test_wake_alone_greets_in_hebrew_then_listens():
+    from mirror.persona import GREETING
+
+    ctl, p, _ = make([Transcript("מראה", "he")], cfg=ConversationConfig(**GREET_CFG))
+    ctl.on_segment(SEG)
+    assert p["tts"].calls == [(GREETING["he"], "he")]
+    assert ctl.state == State.LISTENING and p["llm"].calls == []
+
+
+def test_english_wake_with_question_greets_then_answers():
+    from mirror.persona import GREETING
+
+    ctl, p, _ = make([Transcript("Mirror, who is fairest?", "en")],
+                     cfg=ConversationConfig(**GREET_CFG))
+    ctl.on_segment(SEG)
+    assert p["tts"].calls == [(GREETING["en"], "en"), ("Thou art fairest.", "en")]
+    assert p["llm"].calls == [([], "who is fairest", "en")]
+
+
+def test_follow_ups_need_no_wake_word_until_a_quiet_minute():
+    ctl, p, clock = make([Transcript("מראה", "he"), Transcript("מי הכי יפה", "he"),
+                          Transcript("ומה עוד", "he"), Transcript("עוד שאלה", "he")],
+                         cfg=ConversationConfig(**GREET_CFG))
+    ctl.on_segment(SEG)  # wake + greeting
+    clock.t += 50
+    ctl.on_segment(SEG)  # a question, no wake word
+    clock.t += 59
+    ctl.tick()
+    ctl.on_segment(SEG)  # a follow-up within the minute
+    assert [c[1] for c in p["llm"].calls] == ["מי הכי יפה", "ומה עוד"]
+    clock.t += 61
+    ctl.tick()
+    assert ctl.state == State.IDLE
+    ctl.on_segment(SEG)  # after a quiet minute: ignored without the wake word
+    assert len(p["llm"].calls) == 2
+
+
+def test_wake_word_in_a_conversation_does_not_greet_again():
+    from mirror.persona import GREETING
+
+    ctl, p, _ = make([Transcript("מראה", "he"), Transcript("מראה, מי הכי יפה", "he")],
+                     cfg=ConversationConfig(**GREET_CFG))
+    ctl.on_segment(SEG)
+    ctl.on_segment(SEG)
+    assert [t for t, _ in p["tts"].calls].count(GREETING["he"]) == 1
+
+
+def test_shipped_configs_greet_and_keep_a_minute():
+    from mirror.config import load_config
+
+    for path in ("config/mac.toml", "config/orin.toml"):
+        c = load_config(path).conversation
+        assert c.greeting_enabled and c.listen_timeout_s == 60 and c.followup_s == 60

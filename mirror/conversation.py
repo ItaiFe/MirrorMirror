@@ -23,7 +23,7 @@ import numpy as np
 
 from mirror.config import ConversationConfig
 from mirror.llm import LLMError, server_unreachable
-from mirror.persona import FALLBACK, SYSTEM_PROMPT, pick_angle
+from mirror.persona import FALLBACK, GREETING, SYSTEM_PROMPT, pick_angle
 from mirror.states import State
 from mirror.stt import STTError, Transcript
 from mirror.visemes import rms_shape
@@ -240,6 +240,10 @@ class Controller:
             if wake is None:
                 return
             text = wake.remainder
+            # woken: greet first; from now on no wake word is needed until the
+            # conversation goes quiet (listen_timeout_s / followup_s)
+            if self._cfg.greeting_enabled:
+                self._greet("en" if transcript.lang == "en" else "he")
         else:  # LISTENING
             text = transcript.text if wake is None else wake.remainder
         self._mark_interaction()
@@ -410,6 +414,13 @@ class Controller:
                     return
         except Exception as e:  # noqa: BLE001 - handed to the controller thread
             _put(clips, e, cancel)
+
+    def _greet(self, lang: str) -> None:
+        """Say hello; a failure is logged and the conversation goes on without it."""
+        try:
+            self._speak(GREETING[lang], lang)
+        except Exception:
+            log.exception("greeting failed")
 
     def _speak(self, text: str, lang: str) -> None:
         samples, sr, track = self._tts.synth_visemes(text, lang)
