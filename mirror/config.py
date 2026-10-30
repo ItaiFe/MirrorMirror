@@ -119,6 +119,14 @@ class ConversationConfig:
     lure_interval_s: list = field(default_factory=lambda: [180.0, 420.0])
     # "HH:MM-HH:MM" local-time windows with no lures; a window may cross midnight
     lure_quiet_hours: list = field(default_factory=list)
+    # now and then a due lure is this sound instead (an evil laugh): a 16-bit WAV,
+    # relative to the repo; "" for none. laugh_chance: the share of lures it takes.
+    laugh_file: str = ""
+    laugh_chance: float = 0.33
+
+    def __post_init__(self):
+        if not 0.0 <= self.laugh_chance <= 1.0:
+            raise ValueError(f"conversation.laugh_chance must be 0..1 (got {self.laugh_chance})")
 
 
 @dataclass

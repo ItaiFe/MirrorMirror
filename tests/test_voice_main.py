@@ -719,3 +719,27 @@ def test_build_lures_prepares_with_a_budget_and_skips_when_disabled(caplog):
     tts = TTS()
     assert vm.build_lures(tts, ConversationConfig(lures_enabled=False)) is None
     assert tts.calls == []
+
+
+def test_build_laugh_levels_the_file_and_skips_a_bad_one(tmp_path, caplog):
+    import logging
+    import wave
+
+    from mirror.config import ConversationConfig
+    from mirror.voice_main import LAUGH_PEAK, LAUGH_RMS_DB, build_laugh
+
+    quiet = (np.sin(np.arange(8000) / 5) * 0.02 * 32767).astype("<i2")
+    with wave.open(str(tmp_path / "l.wav"), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(8000)
+        w.writeframes(quiet.tobytes())
+    cfg = ConversationConfig(laugh_file="l.wav")
+    samples, sr, track = build_laugh(cfg, str(tmp_path / "l.wav"))
+    assert sr == 8000 and track is None
+    rms_db = 20 * np.log10(np.sqrt(np.mean(samples ** 2)))
+    assert abs(rms_db - LAUGH_RMS_DB) < 0.5 or np.max(np.abs(samples)) <= LAUGH_PEAK + 1e-6
+    assert build_laugh(ConversationConfig(), "x.wav") is None  # no laugh configured
+    with caplog.at_level(logging.WARNING):
+        assert build_laugh(cfg, str(tmp_path / "missing.wav")) is None
+    assert "could not be loaded" in caplog.text

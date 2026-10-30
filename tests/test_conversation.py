@@ -1221,3 +1221,33 @@ def test_hebrew_followup_after_a_hebrew_wake_is_not_retried():
     ctl.on_segment(SEG)
     ctl.on_segment(SEG)
     assert p["stt"].languages == ["auto", "auto"]
+
+
+# --- the idle laugh ----------------------------------------------------------------
+
+LAUGH_CLIP = np.full(441, -0.5, dtype=np.float32)
+
+
+def test_laugh_takes_a_due_lure_slot():
+    cfg = ConversationConfig(**LURE_CFG, laugh_chance=1.0)
+    ctl, p, clock, lures, _ = make_lured(cfg=cfg, laugh=(LAUGH_CLIP, 22050, None))
+    clock.t += 180
+    ctl.tick()
+    assert [s is LAUGH_CLIP for s in p["player"].played] == [True]
+    assert lures.picks == []  # no spoken lure this time
+    assert p["lights"].states == [State.SPEAKING, State.IDLE]
+
+
+def test_laugh_chance_zero_never_laughs():
+    cfg = ConversationConfig(**LURE_CFG, laugh_chance=0.0)
+    ctl, p, clock, lures, _ = make_lured(cfg=cfg, laugh=(LAUGH_CLIP, 22050, None))
+    for _ in range(5):
+        clock.t += 180
+        ctl.tick()
+    assert lure_plays(p["player"]) == 5
+    assert not any(s is LAUGH_CLIP for s in p["player"].played)
+
+
+def test_laugh_chance_is_validated():
+    with pytest.raises(ValueError):
+        ConversationConfig(laugh_chance=1.5)

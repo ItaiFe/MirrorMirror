@@ -52,7 +52,7 @@ class Controller:
                  first_sentence_timeout_s: float = 20.0, lures=None,
                  wall_clock: Callable[[], datetime] = datetime.now,
                  rng: Optional[random.Random] = None,
-                 angle_rng: Optional[random.Random] = None):
+                 angle_rng: Optional[random.Random] = None, laugh=None):
         self._stt = stt
         self._llm = llm
         self._tts = tts
@@ -76,6 +76,7 @@ class Controller:
         self._closed = threading.Event()
         # idle lures; quiet hours are checked against the local wall clock
         self._lures = lures  # FillerBank of LURES or None
+        self._laugh = laugh  # (samples, sr, None): sometimes played instead of a lure
         self._wall_clock = wall_clock
         self._rng = rng or random.Random()
         self._quiet_hours = parse_quiet_hours(cfg.lure_quiet_hours)
@@ -165,6 +166,8 @@ class Controller:
                 return None
             # a lure is due: whatever happens next, wait a fresh interval for the next
             self._next_lure_at = now + self._draw_lure_wait()
+            if self._laugh is not None and self._rng.random() < self._cfg.laugh_chance:
+                return "laugh", self._laugh
             lang = self._rng.choice(sorted(langs))
             clip = self._lures.pick(lang)
             return None if clip is None else (lang, clip)

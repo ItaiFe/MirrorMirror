@@ -73,6 +73,8 @@ lures_enabled = true       # now and then, while idle, murmur a short line to dr
 lure_min_idle_s = 120      # no lure until this long after the last conversation
 lure_interval_s = [180, 420]   # each wait between lures is drawn at random from this range
 lure_quiet_hours = []      # local-time windows without lures, e.g. ["02:00-08:00", "22:30-01:00"]
+laugh_file = "models/evil_laugh.wav"   # an evil laugh, now and then instead of a lure; not in git
+laugh_chance = 0.33         # the share of idle lures that are the laugh
 
 [ambient]
 enabled = true

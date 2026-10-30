@@ -313,6 +313,34 @@ FILLER_BUDGET_S = 2.5  # persona.py's filler length; Pocket voices can run past 
 LURE_BUDGET_S = 3.5
 
 
+LAUGH_RMS_DB = -20.0  # about the voice's loudness
+LAUGH_PEAK = 0.95
+
+
+def build_laugh(conv_cfg, path: str):
+    """The idle laugh as a clip (samples, sr, None), brought to about the voice's
+    loudness; None if there is none or it can't be loaded (a WARNING)."""
+    if not conv_cfg.laugh_file or not conv_cfg.lures_enabled:
+        return None
+    from mirror.ambient import load_loop
+    try:
+        samples, sr = load_loop(path)
+    except Exception as e:  # noqa: BLE001 - the laugh is never fatal
+        log.warning("laugh file %s could not be loaded (%s: %s); no laugh", path,
+                    type(e).__name__, e)
+        return None
+    rms = float(np.sqrt(np.mean(samples ** 2)))
+    if rms > 0:
+        gain = 10 ** (LAUGH_RMS_DB / 20) / rms
+        peak = float(np.max(np.abs(samples))) * gain
+        if peak > LAUGH_PEAK:
+            gain *= LAUGH_PEAK / peak
+        samples = (samples * gain).astype(np.float32)
+    log.info("laugh: %s (%.1f s, %.0f%% of lures)", path, len(samples) / sr,
+             100 * conv_cfg.laugh_chance)
+    return samples, sr, None
+
+
 def build_lures(tts, conv_cfg):
     """The idle-lure bank, prepared (a WARNING for any lure over LURE_BUDGET_S);
     None when lures are disabled."""
@@ -423,11 +451,13 @@ def run(cfg: Config, wav_path=None, config_path=None) -> int:
         fillers.prepare()
         log.info("filler lines ready in %.1f s", time.monotonic() - t0)
         lures = build_lures(tts, cfg.conversation)
+        laugh = build_laugh(cfg.conversation,
+                            resolve_repo_path(cfg.conversation.laugh_file, config_path))
         unwarmed = warm_llm(llm)
         open_output(output, tts_rate)
         player = LatencyPlayer(output)
         controller = Controller(stt, llm, tts, player, gate, face, cfg.conversation,
-                                fillers=fillers, lures=lures,
+                                fillers=fillers, lures=lures, laugh=laugh,
                                 first_sentence_timeout_s=cfg.servers.timeout_s)
         for lang in unwarmed:
             controller.mark_unwarmed(lang)
