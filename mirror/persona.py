@@ -194,7 +194,8 @@ FALLBACK = {
     "he": "רגע, מאמי, הפאה שלי זזה. שאלו אותי שוב עוד רגע.",
 }
 
-# Spoken while the LLM thinks; each one is at most ~2.5 s long.
+# Spoken while the LLM thinks (natural ones, then sassy ones); each one is at most
+# ~2.5 s long.
 FILLERS: dict[str, list[str]] = {
     "en": [
         "Mmmm… I think I understand what you want.",
@@ -209,6 +210,19 @@ FILLERS: dict[str, list[str]] = {
         "Aha… yes, yes…",
         "Hmm, curious. Very curious…",
         "Let me see what I can see…",
+        # sassy ones
+        "Honey, what is that wedgie…",
+        "I can't handle this heat…",
+        "Why did they stick me in the desert for a week…",
+        "One second, I'm fixing my wig…",
+        "Ugh, more dust on my glass…",
+        "Hold on, darling, let me breathe…",
+        "Wow, what a question. Let me digest…",
+        "Patience, sweetie. A diva doesn't rush…",
+        "Oh, this sun is ruining my make-up…",
+        "Okay, okay, don't rush me…",
+        "Who put me out here without air conditioning…",
+        "Shh, I'm thinking. It takes a while…",
     ],
     "he": [
         "מממ… אני חושבת שאני מבינה מה אתם רוצים.",
@@ -223,6 +237,19 @@ FILLERS: dict[str, list[str]] = {
         "אהה… כן, כן…",
         "הממ, מסקרן. מאוד מסקרן…",
         "בואו נראה מה אני רואה…",
+        # sassy ones
+        "מאמי, מה זה הוודג' הזה…",
+        "אין לי כוח לחום הזה…",
+        "למה תקעו אותי לשבוע במדבר…",
+        "שנייה, אני מסדרת את הפאה…",
+        "אוף, עוד פעם אבק על הזכוכית…",
+        "רגע, מאמי, תנו לי לנשום…",
+        "וואו, איזו שאלה. רגע לעכל…",
+        "סבלנות, דיווה לא ממהרת…",
+        "אוי, השמש הזאת הורסת לי את האיפור…",
+        "טוב, טוב, אל תלחצו עליי…",
+        "מי שם אותי פה בלי מזגן…",
+        "ששש, אני חושבת…",
     ],
 }
 
