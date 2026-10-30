@@ -60,8 +60,9 @@ def test_llm_error_on_timeout_and_empty():
 
 
 def test_fallback_texts():
-    assert FALLBACK["en"] == "The mists are too thick right now. Ask me again in a moment."
-    assert FALLBACK["he"] == "הערפל סמיך מדי כרגע. שאלו אותי שוב עוד רגע."
+    assert FALLBACK["en"] == ("Oops, my thoughts ran off to chase their own tail. "
+                              "Ask me again in a moment.")
+    assert FALLBACK["he"] == "אופס, המחשבות שלי ברחו לרדוף אחרי הזנב. שאלו אותי שוב עוד רגע."
 
 
 # --- oracle world background -------------------------------------------------
@@ -470,8 +471,8 @@ def test_angle_note_in_both_languages():
     from mirror.persona import Angle, angle_note
 
     en = angle_note(Angle("playful dare", "bicycles"), "en")
-    assert en == ("(Answer as a playful dare, using images of bicycles. "
-                  "Start by answering their actual question.)")
+    assert en == ("(Answer as a playful dare, with a playful nod to bicycles. "
+                  "Start by answering their actual question in plain words.)")
     he = angle_note(Angle("playful dare", "bicycles"), "he")
     assert he.startswith("(") and he.endswith(")") and "אופניים" in he
     assert not re.search(r"[A-Za-z]", he)
@@ -550,7 +551,7 @@ def test_persona_drops_the_fixed_imagery_and_bans_stock_words():
         assert word in en
     assert "במשפט הראשון" in he and "אוקר" in he and "נצנוץ" in he
     assert "never cruel" in en and "one to three short" in en
-    assert "40 words" in en and "40 מילים" in he
+    assert "35 words" in en and "35 מילים" in he
 
 
 def test_hebrew_examples_avoid_the_overused_images():
