@@ -163,15 +163,15 @@ def test_followup_window_expires_and_clears_history():
     assert p["llm"].calls[1] == ([], "again", "en")
 
 
-def test_history_keeps_last_six():
+def test_history_keeps_the_last_two_exchanges():
     script = [Transcript("mirror mirror q0", "en")] + [
-        Transcript(f"q{i}", "en") for i in range(1, 5)]
+        Transcript(f"q{i} please", "en") for i in range(1, 5)]
     ctl, p, _ = make(script)
     for _ in script:
         ctl.on_segment(SEG)
     history = p["llm"].calls[-1][0]
-    assert len(history) == 6
-    assert history[0] == {"role": "user", "content": "q1"}
+    assert len(history) == 4
+    assert history[0] == {"role": "user", "content": "q2 please"}
 
 
 def test_wake_phrase_in_listening_uses_remainder():
@@ -1311,3 +1311,13 @@ def test_shipped_configs_greet_and_keep_a_minute():
     for path in ("config/mac.toml", "config/orin.toml"):
         c = load_config(path).conversation
         assert c.greeting_enabled and c.listen_timeout_s == 60 and c.followup_s == 60
+
+
+def test_a_one_word_scrap_in_the_conversation_is_ignored():
+    ctl, p, _ = make([Transcript("מראה", "he"), Transcript("אה...", "he"),
+                      Transcript("מה שלומך היום", "he")])
+    ctl.on_segment(SEG)
+    ctl.on_segment(SEG)  # "אה..." gets no answer
+    assert p["llm"].calls == [] and ctl.state == State.LISTENING
+    ctl.on_segment(SEG)
+    assert [c[1] for c in p["llm"].calls] == ["מה שלומך היום"]

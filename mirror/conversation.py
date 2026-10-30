@@ -27,11 +27,12 @@ from mirror.persona import FALLBACK, GREETING, SYSTEM_PROMPT, pick_angle
 from mirror.states import State
 from mirror.stt import STTError, Transcript
 from mirror.visemes import rms_shape
-from mirror.wake import is_hallucination, match_wake
+from mirror.wake import is_hallucination, match_wake, normalize
 
 log = logging.getLogger("mirror.conversation")
 
-_HISTORY_MAX = 6
+MIN_FOLLOWUP_WORDS = 2  # without the wake word, "אה…" or a misheard scrap is not a question
+_HISTORY_MAX = 4  # two exchanges: a longer history makes the answers longer
 HOP_S = 0.02   # the player reports one mouth level per 20 ms hop
 LEAD_S = 0.05  # show each mouth shape slightly before its sound
 _POLL_S = 0.1  # how often a blocked worker checks whether it was cancelled
@@ -246,6 +247,9 @@ class Controller:
                 self._greet("en" if transcript.lang == "en" else "he")
         else:  # LISTENING
             text = transcript.text if wake is None else wake.remainder
+            if wake is None and len(normalize(text).split()) < MIN_FOLLOWUP_WORDS:
+                log.info("ignored (too short to be a question): %r", text)
+                return
         self._mark_interaction()
         if text:
             self._answer(text, transcript.lang)

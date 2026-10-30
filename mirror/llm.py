@@ -41,6 +41,9 @@ _ANSWER_LABEL = re.compile(
     r"^\s*(?:תשובה|answer|האורקל|אורקל|oracle|המראה|mirror)\s*[:\-–—]\s*",
     re.IGNORECASE)
 _STRAY_MARKS = re.compile(r"[*\[\]()]")
+# The model thinks first ("THINK: ...") and then speaks ("SAY: ..."); only SAY is heard.
+_SAY = re.compile(r"\bSAY\s*:\s*", re.IGNORECASE)
+_THINK = "THINK"
 _SENTENCE_SPLIT = re.compile(r"(?<=[.!?…])\s+")
 _JOINERS = {"‍", "︎", "️"}  # ZWJ and variation selectors
 # llama-server runs with -np 2: each language keeps its own slot, so its long
@@ -61,6 +64,19 @@ def server_unreachable(e: BaseException) -> bool:
     """True if the LLMError came from a failed connection (llama-server down or
     restarting, so its prompt caches are gone)."""
     return isinstance(e.__cause__, requests.exceptions.ConnectionError)
+
+
+def _spoken_part(text: str) -> str:
+    """The part of a THINK/SAY reply that is spoken: after "SAY:"; without one, the
+    text minus a leading THINK line (a model that skipped the format is spoken as is)."""
+    m = _SAY.search(text)
+    if m:
+        return text[m.end():]
+    stripped = text.lstrip()
+    if stripped.upper().startswith(_THINK):
+        _, _, rest = stripped.partition("\n")
+        return rest
+    return text
 
 
 def _strip_emoji(text: str) -> str:
@@ -261,7 +277,8 @@ class LlamaServerLLM:
             raise LLMError(f"llama-server request failed: {e}") from e
         except (ValueError, KeyError, IndexError, TypeError) as e:  # bad JSON shape
             raise LLMError(f"malformed llama-server response: {e}") from e
-        text = trim_reply(str(content), self._max_sentences, self._max_chars)
+        text = trim_reply(_spoken_part(str(content)).strip(), self._max_sentences,
+                          self._max_chars)
         if not text:
             raise LLMError("llama-server returned an empty reply")
         return text
@@ -321,6 +338,7 @@ class LlamaServerLLM:
                            stream=True) as resp:
             resp.raise_for_status()
             buf = ""
+            pre, speaking = "", False  # the THINK part, until "SAY:" arrives
             for line in resp.iter_lines():
                 if cancel is not None and cancel.is_set():
                     return
@@ -346,7 +364,20 @@ class LlamaServerLLM:
                     first = False
                     log.info("llm first token (%s): %.0f ms", lang,
                              1000.0 * (time.monotonic() - t0))
+                if not speaking:
+                    pre += delta
+                    m = _SAY.search(pre)
+                    head = pre.lstrip().upper()
+                    if m:
+                        log.info("llm think (%s): %s", lang, pre[:m.start()].strip())
+                        delta, speaking = pre[m.end():], True
+                    elif head and not (head.startswith(_THINK) or _THINK.startswith(head)):
+                        delta, speaking = pre, True  # no THINK line: all of it is spoken
+                    else:
+                        continue
                 done, buf = _pop_sentences(buf + delta)
                 yield from done
+            if not speaking:
+                buf = _spoken_part(pre)
             if buf.strip():
                 yield buf

@@ -60,9 +60,8 @@ def test_llm_error_on_timeout_and_empty():
 
 
 def test_fallback_texts():
-    assert FALLBACK["en"] == ("Oops, my thoughts ran off to chase their own tail. "
-                              "Ask me again in a moment.")
-    assert FALLBACK["he"] == "אופס, המחשבות שלי ברחו לרדוף אחרי הזנב. שאלו אותי שוב עוד רגע."
+    assert FALLBACK["en"] == "Hold on, honey, my wig slipped. Ask me again in a moment."
+    assert FALLBACK["he"] == "רגע, מאמי, הפאה שלי זזה. שאלו אותי שוב עוד רגע."
 
 
 # --- oracle world background -------------------------------------------------
@@ -82,13 +81,14 @@ def test_missing_world_file_empty(tmp_path, caplog):
 
 def test_system_prompt_contains_world_and_time():
     en = system_prompt("en", "WORLD TEXT", NOW)
-    assert en.startswith(SYSTEM_PROMPT["en"] + "\n\nWORLD TEXT\n\n")
+    assert en.startswith(SYSTEM_PROMPT["en"] + "\n\n")
+    assert "\n\nWORLD TEXT\n\n" in en
     assert en.endswith("It is now Thursday night at the burn.")
     he = system_prompt("he", "WORLD TEXT", NOW)
     assert he.startswith(SYSTEM_PROMPT["he"] + "\n\n")
     assert "\n\nWORLD TEXT\n\n" in he
     assert he.endswith("עכשיו חמישי לילה בברן.")
-    assert "ענה תמיד בעברית" in SYSTEM_PROMPT["he"]
+    assert "עני תמיד בעברית" in SYSTEM_PROMPT["he"]
 
 
 def test_time_of_day_boundaries():
@@ -327,12 +327,12 @@ def test_hebrew_prompt_has_plural_examples_before_world():
     assert len(HEBREW_EXAMPLES) == 5
     he = system_prompt("he", "WORLD", NOW)
     en = system_prompt("en", "WORLD", NOW)
-    for question, answer in HEBREW_EXAMPLES:
-        assert question in he and answer in he
+    for question, think, answer in HEBREW_EXAMPLES:
+        assert question in he and answer in he and f"THINK: {think}\nSAY: {answer}" in he
         assert answer not in en
         assert any(w in answer for w in ("אתם", "אתכם", "שאלו", "לכם"))
         assert he.index(answer) < he.index("WORLD")
-    assert len({a.split()[0] for _, a in HEBREW_EXAMPLES}) == 5  # varied openings
+    assert len({a.split()[0] for _, _, a in HEBREW_EXAMPLES}) == 5  # varied openings
     assert "רק את הטון" in he  # the examples are not to be copied
 
 
@@ -376,14 +376,14 @@ def test_singular_address_markers():
 def test_hebrew_examples_include_singular_questions_with_plural_answers():
     from mirror.persona import HEBREW_EXAMPLES, singular_address
 
-    questions = [q for q, _ in HEBREW_EXAMPLES]
+    questions = [q for q, _, _ in HEBREW_EXAMPLES]
     assert any(q.startswith("תגיד") for q in questions)  # masculine singular
     assert any("מפחדת" in q for q in questions)  # feminine singular
     he = system_prompt("he", "WORLD", NOW)
-    for question, answer in HEBREW_EXAMPLES:
+    for question, _, answer in HEBREW_EXAMPLES:
         assert answer in he
         assert singular_address(answer) == [], (question, answer)
-    assert any("אני יודע" in a for _, a in HEBREW_EXAMPLES)  # masculine first person
+    assert any("אני יודעת" in a for _, _, a in HEBREW_EXAMPLES)  # feminine first person
 
 
 # --- llama-server flags --------------------------------------------------------------
@@ -469,10 +469,10 @@ def test_angle_note_in_both_languages():
     from mirror.persona import Angle, angle_note
 
     en = angle_note(Angle("playful dare"), "en")
-    assert en == ("(Answer as a playful dare, about exactly what they asked: answer it "
+    assert en == ("(Answer as a diva's dare, about exactly what they asked: answer it "
                   "plainly first, then make the joke about that same thing.)")
     he = angle_note(Angle("playful dare"), "he")
-    assert he.startswith("(") and he.endswith(")") and "באתגר שובב" in he
+    assert he.startswith("(") and he.endswith(")") and "באתגר של דיווה" in he
     assert not re.search(r"[A-Za-z]", he)
     assert angle_note(Angle("riddle"), "fr") == angle_note(Angle("riddle"), "en")
 
@@ -547,14 +547,15 @@ def test_persona_drops_the_fixed_imagery_and_bans_stock_words():
                  "dust remembers"):
         assert word in en
     assert "במשפט הראשון" in he and "אוקר" in he and "נצנוץ" in he
-    assert "never cruel" in en and "one to three short" in en
-    assert "35 words" in en and "35 מילים" in he
+    assert "never cruel" in en and "one or two short" in en
+    assert "25 words" in en and "25 מילים" in he
+    assert "THINK:" in en and "SAY:" in en and "THINK:" in he and "SAY:" in he
 
 
 def test_hebrew_examples_avoid_the_overused_images():
     from mirror.persona import HEBREW_EXAMPLES
 
-    for _, answer in HEBREW_EXAMPLES:
+    for _, _, answer in HEBREW_EXAMPLES:
         for stock in ("חוט", "כוכב", "ערפל", "לוחש", "נצנוץ", "השתקפות"):
             assert stock not in answer, (stock, answer)
 
@@ -675,3 +676,30 @@ def test_an_echoed_question_is_dropped():
                return_value=_sse("שאלה: אתה באמת", " יודע הכל? אני רואה", " מפתחות.")):
         out = list(LlamaServerLLM("http://x", 5).reply_stream([], "hi", "he"))
     assert out == ["אני רואה מפתחות."]
+
+
+# --- think first: only the SAY part is spoken -----------------------------------------
+
+@pytest.mark.parametrize("chunks, spoken", [
+    (("THINK: asks about love; joke: dust", "\nSAY: Yes, tonight. ", "Wipe your goggles."),
+     ["Yes, tonight.", "Wipe your goggles."]),
+    (("TH", "INK: x\nS", "AY: Hello there."), ["Hello there."]),  # markers split
+    (("THINK: x\nHello there.",), ["Hello there."]),  # no SAY: the THINK line is dropped
+    (("Hello there. Bye.",), ["Hello there.", "Bye."]),  # no format at all: spoken as is
+])
+def test_stream_speaks_only_the_say_part(chunks, spoken):
+    with patch("mirror.llm.requests.post", return_value=_sse(*chunks)):
+        out = list(LlamaServerLLM("http://x", 5).reply_stream([], "hi", "en"))
+    assert out == spoken
+
+
+def test_reply_speaks_only_the_say_part():
+    with patch("mirror.llm.requests.post",
+               return_value=_ok("THINK: outfit; joke: jealous\nSAY: Love it, honey.")):
+        assert LlamaServerLLM("http://x", 5).reply([], "hi", "en") == "Love it, honey."
+
+
+def test_examples_show_the_think_say_format_in_both_languages():
+    for lang in ("en", "he"):
+        prompt = system_prompt(lang, "W", NOW)
+        assert "\nTHINK: " in prompt and "\nSAY: " in prompt

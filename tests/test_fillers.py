@@ -89,16 +89,16 @@ def test_lure_copy():
     from mirror.persona import LURES, singular_address
 
     assert LURES["en"] == [
-        "Psst! Yes, you. Come closer, I don't bite… usually.",
-        "I know a secret about you. Come and ask!",
-        "Say \"mirror\", and watch me grin.",
-        "Who's that good-looking stranger? Oh, it's you. Come closer!",
+        "Psst, gorgeous! Yes, you. Come closer, I don't bite… much.",
+        "Darling, I've been standing here all day. Come entertain me!",
+        "Say \"mirror\", and I'll tell you the truth. Brace yourself.",
+        "Who wants the truth? Come closer, honey.",
     ]
     assert LURES["he"] == [
-        "פססט! כן, אתם. בואו, אני לא נושך… בדרך כלל.",
-        "אני יודע עליכם סוד. בואו לשאול!",
-        "תגידו \"מראה\", ותראו איזה חיוך יש לי.",
-        "מי היפים האלה שם? אה, זה אתם. בואו קרוב!",
+        "פססט, מהממים! כן, אתם. בואו, אני לא נושכת… הרבה.",
+        "מאמי, אני עומדת פה כל היום. בואו לבדר אותי!",
+        "תגידו \"מראה\", ואגיד לכם את האמת. תתכוננו.",
+        "מי רוצה לשמוע את האמת? בואו קרוב, יקירים.",
     ]
     for line in LURES["he"]:
         assert singular_address(line) == [], line  # the crowd, in plural
