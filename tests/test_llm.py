@@ -41,7 +41,7 @@ def test_request_shape():
     args, kwargs = post.call_args
     assert args[0] == "http://x:8080/v1/chat/completions"
     body = kwargs["json"]
-    assert body["max_tokens"] == 120 and body["temperature"] == 0.95
+    assert body["max_tokens"] == 120 and body["temperature"] == 0.8
     assert body["messages"][0] == {"role": "system",
                                    "content": system_prompt("he", "W", NOW)}
     assert body["messages"][1:3] == history
@@ -444,47 +444,44 @@ def test_hebrew_address_check_tool_reports_rate(capsys):
 def test_pick_angle_is_deterministic_with_a_seeded_rng():
     import random
 
-    from mirror.persona import IMAGERY, MODES, pick_angle
+    from mirror.persona import MODES, pick_angle
 
-    assert len(MODES) == 8 and len(IMAGERY) >= 25
+    assert len(MODES) == 8
     a = [pick_angle(random.Random(3), []) for _ in range(2)]
     assert a[0] == a[1]
-    assert a[0].mode in MODES and a[0].imagery in IMAGERY
+    assert a[0].mode in MODES
 
 
 def test_pick_angle_respects_the_no_repeat_windows():
     import random
 
-    from mirror.persona import IMAGERY, MODES, pick_angle
+    from mirror.persona import MODES, pick_angle
 
     rng, recent = random.Random(11), []
     for _ in range(200):
         angle = pick_angle(rng, recent)
         assert angle.mode not in [r.mode for r in recent[-3:]]
-        assert angle.imagery not in [r.imagery for r in recent[-5:]]
         recent.append(angle)
     assert {r.mode for r in recent} == set(MODES)  # every mode gets its turn
-    assert len({r.imagery for r in recent}) == len(IMAGERY)
 
 
 def test_angle_note_in_both_languages():
     from mirror.persona import Angle, angle_note
 
-    en = angle_note(Angle("playful dare", "bicycles"), "en")
-    assert en == ("(Answer as a playful dare, with a playful nod to bicycles. "
-                  "Start by answering their actual question in plain words.)")
-    he = angle_note(Angle("playful dare", "bicycles"), "he")
-    assert he.startswith("(") and he.endswith(")") and "אופניים" in he
+    en = angle_note(Angle("playful dare"), "en")
+    assert en == ("(Answer as a playful dare, about exactly what they asked: answer it "
+                  "plainly first, then make the joke about that same thing.)")
+    he = angle_note(Angle("playful dare"), "he")
+    assert he.startswith("(") and he.endswith(")") and "באתגר שובב" in he
     assert not re.search(r"[A-Za-z]", he)
-    assert angle_note(Angle("riddle", "fire"), "fr") == angle_note(Angle("riddle", "fire"), "en")
+    assert angle_note(Angle("riddle"), "fr") == angle_note(Angle("riddle"), "en")
 
 
 def test_every_mode_and_image_world_has_hebrew():
-    from mirror.persona import IMAGERY, MODES, Angle, angle_note
+    from mirror.persona import MODES, Angle, angle_note
 
     for mode in MODES:
-        for imagery in IMAGERY:
-            assert not re.search(r"[A-Za-z]", angle_note(Angle(mode, imagery), "he"))
+        assert not re.search(r"[A-Za-z]", angle_note(Angle(mode), "he"))
 
 
 def test_angle_goes_at_the_end_of_the_user_message_only():
@@ -492,7 +489,7 @@ def test_angle_goes_at_the_end_of_the_user_message_only():
 
     llm = LlamaServerLLM("http://x", 5, world="W", now=lambda: NOW)
     bodies = []
-    for angle in (Angle("riddle", "fire"), Angle("tiny story", "kites")):
+    for angle in (Angle("riddle"), Angle("tiny story")):
         with patch("mirror.llm.requests.post", return_value=_sse("Hi.")) as post:
             list(llm.reply_stream([{"role": "user", "content": "a"}], "hi", "he",
                                   angle=angle))
@@ -503,14 +500,14 @@ def test_angle_goes_at_the_end_of_the_user_message_only():
     # the system prompt is byte-identical, so the prompt cache stays warm
     assert bodies[0]["messages"][0] == bodies[1]["messages"][0]
     with patch("mirror.llm.requests.post", return_value=_ok("Hi.")) as post:
-        llm.reply([], "hi", "en", angle=Angle("riddle", "fire"))
+        llm.reply([], "hi", "en", angle=Angle("riddle"))
     assert post.call_args.kwargs["json"]["messages"][-1]["content"].startswith("hi (Answer as")
     with patch("mirror.llm.requests.post", return_value=_ok("Hi.")) as post:
         llm.reply([], "hi", "en")  # no angle: the question as asked
     assert post.call_args.kwargs["json"]["messages"][-1]["content"] == "hi"
 
 
-SAMPLING = {"temperature": 0.95, "top_p": 0.95, "min_p": 0.05, "repeat_penalty": 1.12,
+SAMPLING = {"temperature": 0.8, "top_p": 0.95, "min_p": 0.05, "repeat_penalty": 1.12,
             "presence_penalty": 0.4, "frequency_penalty": 0.3}
 
 

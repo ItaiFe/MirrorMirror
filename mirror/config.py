@@ -152,7 +152,7 @@ class AmbientConfig:
 class LlmConfig:
     """Sampling sent with every llama-server request: a high temperature and
     repetition penalties keep the oracle's answers from all sounding alike."""
-    temperature: float = 0.95
+    temperature: float = 0.8
     top_p: float = 0.95
     min_p: float = 0.05
     repeat_penalty: float = 1.12

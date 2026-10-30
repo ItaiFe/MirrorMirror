@@ -312,7 +312,7 @@ class Controller:
                                    if now - t <= ANGLE_MEMORY_S][-_ANGLES_KEPT:]
             angle = pick_angle(self._angle_rng, [a for _, a in self._recent_angles])
             self._recent_angles.append((now, angle))
-            log.info("angle: %s, %s", angle.mode, angle.imagery)
+            log.info("angle: %s", angle.mode)
             return angle
         except Exception:
             log.exception("choosing an answer angle failed")

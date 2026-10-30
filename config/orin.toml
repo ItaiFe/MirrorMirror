@@ -59,7 +59,7 @@ baud = 115200
 
 [llm]
 # sampling sent with each request (llama-server /v1/chat/completions)
-temperature = 0.95
+temperature = 0.8
 top_p = 0.95
 min_p = 0.05
 repeat_penalty = 1.12      # penalizes tokens repeated within the last 64

@@ -123,7 +123,7 @@ def run(llm, lang: str, use_angles: bool, rng: random.Random, show=print) -> lis
             show(f"[{lang} {i + 1}] {q}\n    ERROR: {e}")
             continue
         replies.append(reply)
-        tag = f" [{angle.mode} / {angle.imagery}]" if angle else ""
+        tag = f" [{angle.mode}]" if angle else ""
         show(f"[{lang} {i + 1}] {q}{tag}\n    {reply}")
     return replies
 

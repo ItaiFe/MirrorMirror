@@ -18,6 +18,8 @@ SYSTEM_PROMPT = {
         "silly riddles, playful teasing and little jokes, as if everything is a game "
         "and you know a secret you will only half tell. Answer the visitor's actual "
         "question in your first sentence, in plain words, then give it a funny twist. "
+        "The twist is about the very thing they asked, so anyone can tell at once that "
+        "you answered their question; never wander off to an unrelated image. "
         "Use simple everyday words that anyone understands at once, even a sleepless "
         "burner at four in the morning. No deep philosophy, no heavy poetry and no long "
         "metaphors: one clear, surprising, funny idea per answer is plenty. You may "
@@ -37,7 +39,8 @@ SYSTEM_PROMPT = {
         "מדבר בקול רם עם מי שעומדים מולך. אתה מצחיק וגחמני: אתה עונה בהיגיון הפוך, "
         "בחידות מטופשות, בהקנטות חביבות ובבדיחות קטנות, כאילו הכול משחק ואתה יודע סוד "
         "שתגלה רק חצי ממנו. ענה על השאלה עצמה כבר במשפט הראשון, במילים פשוטות, ורק אז "
-        "תן לה טוויסט מצחיק. השתמש במילים יומיומיות שכל אחד מבין מיד, גם מי שלא ישנו "
+        "תן לה טוויסט מצחיק. גם הטוויסט עוסק בדיוק בדבר שעליו שאלו, כך שכל אחד מבין מיד "
+        "שזו תשובה לשאלה שלהם; לעולם אל תסטה לדימוי שלא קשור אליה. השתמש במילים יומיומיות שכל אחד מבין מיד, גם מי שלא ישנו "
         "כבר יומיים. בלי פילוסופיה עמוקה, בלי שירה כבדה ובלי מטאפורות ארוכות: רעיון אחד "
         "ברור, מפתיע ומצחיק בכל תשובה מספיק. מותר לך לסתור את עצמך בעליזות אם זה מצחיק, "
         "ומשחקי מילים משמחים אותך. לעולם אל תחזור על בדיחה, דימוי או ביטוי מתשובות "
@@ -117,8 +120,9 @@ def singular_address(text: str) -> list[str]:
 
 # --- angles: a different way into each answer -----------------------------------------
 # Every request carries the same system prompt (it stays cached), so without a
-# per-answer nudge a small model keeps reaching for the same few images. Each answer
-# gets an angle (a mode and an image world), appended to the user message.
+# per-answer nudge a small model keeps answering the same way. Each answer gets an
+# angle (a mode), appended to the user message. (An "image world" used to go with it,
+# but it pulled the answers away from the question.)
 
 # mode -> (English, Hebrew) wording, for "Answer as ..." / "ענה ..."
 MODES: dict[str, tuple[str, str]] = {
@@ -132,76 +136,32 @@ MODES: dict[str, tuple[str, str]] = {
     "playful tease": ("a playful tease", "בהקנטה חביבה"),
 }
 
-# image world -> (English, Hebrew)
-IMAGERY: dict[str, tuple[str, str]] = {
-    "fire": ("fire", "אש"),
-    "water": ("water", "מים"),
-    "birds": ("birds", "ציפורים"),
-    "flamingos": ("flamingos", "פלמינגו"),
-    "music and drums": ("music and drums", "מוזיקה ותופים"),
-    "bicycles": ("bicycles", "אופניים"),
-    "art cars": ("art cars", "מכוניות אמנות"),
-    "food and tea": ("food and tea", "אוכל ותה"),
-    "colours": ("colours", "צבעים"),
-    "numbers": ("numbers", "מספרים"),
-    "animals": ("animals", "חיות"),
-    "weather and wind": ("weather and wind", "מזג אוויר ורוח"),
-    "the Temple": ("the Temple", "המקדש"),
-    "the Man": ("the Man", "האיש הבוער"),
-    "shoes": ("shoes", "נעליים"),
-    "maps": ("maps", "מפות"),
-    "keys": ("keys", "מפתחות"),
-    "clocks": ("clocks", "שעונים"),
-    "seeds": ("seeds", "זרעים"),
-    "salt": ("salt", "מלח"),
-    "honey": ("honey", "דבש"),
-    "moths": ("moths", "עשים"),
-    "lanterns": ("lanterns", "פנסים"),
-    "kites": ("kites", "עפיפונים"),
-    "sand dunes": ("sand dunes", "דיונות חול"),
-    "the moon's phases": ("the moon's phases", "מופעי הירח"),
-    "bread": ("bread and baking", "לחם ואפייה"),
-    "boats": ("boats and sailing", "סירות והפלגה"),
-    "dancing": ("dancing", "ריקוד"),
-    "cats": ("cats", "חתולים"),
-    "gardens": ("gardens", "גינות"),
-    "trains": ("trains", "רכבות"),
-    "circus": ("the circus", "הקרקס"),
-    "mountains": ("mountains", "הרים"),
-}
-
 MODE_WINDOW = 3  # a mode is not reused within this many answers
-IMAGERY_WINDOW = 5  # nor an image world within this many
 
 _ANGLE_NOTE = {
-    "en": "(Answer as {mode}, with a playful nod to {imagery}. "
-          "Start by answering their actual question in plain words.)",
-    "he": "(ענה {mode}, עם קריצה קטנה ל{imagery}. פתח בתשובה פשוטה לשאלה עצמה, "
-          "ופנה אליהם בלשון רבים.)",
+    "en": "(Answer as {mode}, about exactly what they asked: answer it plainly "
+          "first, then make the joke about that same thing.)",
+    "he": "(ענה {mode}, בדיוק על מה ששאלו: קודם תשובה פשוטה, ואז בדיחה על אותו "
+          "דבר עצמו. פנה אליהם בלשון רבים.)",
 }
 
 
 class Angle(NamedTuple):
     mode: str  # a key of MODES
-    imagery: str  # a key of IMAGERY
 
 
 def pick_angle(rng: random.Random, recent: Sequence[Angle]) -> Angle:
     """A random angle whose mode is none of the last MODE_WINDOW modes in `recent`
-    (oldest first) and whose image world is none of the last IMAGERY_WINDOW."""
+    (oldest first)."""
     used_modes = {a.mode for a in recent[-MODE_WINDOW:]}
-    used_imagery = {a.imagery for a in recent[-IMAGERY_WINDOW:]}
-    mode = rng.choice([m for m in MODES if m not in used_modes])
-    imagery = rng.choice([i for i in IMAGERY if i not in used_imagery])
-    return Angle(mode, imagery)
+    return Angle(rng.choice([m for m in MODES if m not in used_modes]))
 
 
 def angle_note(angle: Angle, lang: str) -> str:
     """The short hidden instruction appended to the user message, in the visitor's
     language (English for an unknown one)."""
     i = 1 if lang == "he" else 0
-    return _ANGLE_NOTE["he" if i else "en"].format(mode=MODES[angle.mode][i],
-                                                   imagery=IMAGERY[angle.imagery][i])
+    return _ANGLE_NOTE["he" if i else "en"].format(mode=MODES[angle.mode][i])
 
 
 FALLBACK = {
