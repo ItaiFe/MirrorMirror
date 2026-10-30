@@ -102,3 +102,13 @@ def test_lure_copy():
     ]
     for line in LURES["he"]:
         assert singular_address(line) == [], line  # the crowd, in plural
+
+
+def test_pick_plays_every_clip_before_any_repeats():
+    bank = FillerBank(FakeTTS(), {"he": [f"line {i}" for i in range(24)]},
+                      rng=random.Random(5))
+    bank.prepare()
+    order = [int(bank.pick("he")[0][0]) for _ in range(24 * 6)]
+    for start in range(0, len(order), 24):
+        assert sorted(order[start:start + 24]) == list(range(1, 25))  # each round: all, once
+    assert all(a != b for a, b in zip(order, order[1:]))  # never twice in a row

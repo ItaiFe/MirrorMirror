@@ -24,6 +24,7 @@ class FillerBank:
         self._rng = rng or random.Random()
         self._clips: dict[str, list[Clip]] = {}
         self._last: dict[str, int] = {}
+        self._deck: dict[str, list[int]] = {}  # the clips not yet played this round
 
     def prepare(self) -> None:
         """Synthesize every line (once, at startup). A line that fails is skipped."""
@@ -48,12 +49,19 @@ class FillerBank:
         return [lang for lang, clips in self._clips.items() if clips]
 
     def pick(self, lang: str) -> Clip | None:
-        """A random cached clip for lang, never the same one twice in a row;
+        """A cached clip for lang, shuffled like a deck: every clip plays once before
+        any plays again, and a new round never starts with the last one played.
         None if there is none."""
         clips = self._clips.get(lang)
         if not clips:
             return None
-        choices = [i for i in range(len(clips)) if i != self._last.get(lang)] or [0]
-        i = self._rng.choice(choices)
+        deck = self._deck.get(lang)
+        if not deck:
+            deck = list(range(len(clips)))
+            self._rng.shuffle(deck)
+            if len(deck) > 1 and deck[-1] == self._last.get(lang):
+                deck[0], deck[-1] = deck[-1], deck[0]  # popped from the end
+            self._deck[lang] = deck
+        i = deck.pop()
         self._last[lang] = i
         return clips[i]
