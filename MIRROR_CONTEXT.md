@@ -27,8 +27,8 @@ language. Fully offline. Placed away from loud areas.
 - Trigger: wake phrase in either language, no button. Silero VAD cuts
   speech segments from the ReSpeaker's processed audio; whisper.cpp
   transcribes each one; wake if the normalized text starts with
-  "mirror mirror" or "מראה מראה" (fuzzy match, spelling variants
-  allowed). "on the wall" / "שעל הקיר" optional. Speech after the
+  "mirror" or "מראה", once or repeated (fuzzy match, spelling variants
+  allowed; a single word is enough since 2026-10-30). "on the wall" / "שעל הקיר" optional. Speech after the
   phrase in the same segment is the question.
 - Power at the event: 220 V AC standard outlet feeding all supplies. 12 V 600 W (amp, strip, fan; each branch fused at 10 A);
   separate 5 V (panels, cards); Orin on its own supply.

@@ -27,13 +27,23 @@ from mirror.wake import is_hallucination, match_wake
     ("מראה מראה מורה אמרה לי", "מורה אמרה לי"),
     ("מראה מראה מראש", "מראש"),
     ("מראה מראה מירה", "מירה"),
+    # one wake word is enough
+    ("mirror", ""),
+    ("מיר", ""),
+    ("Mirror, tell me a joke", "tell me a joke"),
+    ("mirror is mirror", "is mirror"),
+    ("mirror, error codes?", "error codes"),
+    ("מראה, מה העתיד שלי?", "מה העתיד שלי"),
+    # live on the Orin: the first "מראה" of two was lost
+    ("המראה שעל הקיר", ""),
+    ("מירו על הוול, מה צופן העתיד?", "מה צופן העתיד"),
 ])
 def test_matches(text, rem):
     assert match_wake(text).remainder == rem
 
 
-@pytest.mark.parametrize("text", ["the mirror is nice", "hello there", "מה קורה", "", "mirror", "מיר",
-                                  "a mirror mirror", "mirror is mirror"])
+@pytest.mark.parametrize("text", ["the mirror is nice", "hello there", "מה קורה", "",
+                                  "a mirror mirror", "אמר אשר על הקיר"])
 def test_no_match(text):
     assert match_wake(text) is None
 

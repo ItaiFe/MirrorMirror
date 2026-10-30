@@ -1,4 +1,4 @@
-"""Bilingual (English/Hebrew) wake-phrase matching for "mirror, mirror"."""
+"""Bilingual (English/Hebrew) wake-phrase matching: "mirror" / "מראה", once or more."""
 import re
 import unicodedata
 from dataclasses import dataclass
@@ -9,8 +9,8 @@ _THRESHOLD = 0.75
 _MIRROR_THRESHOLD = 0.7
 _HEBREW_VARIANTS = {"מראה", "מראא", "מרא", "מירא"}
 # English "mirror" transliterated into Hebrew letters by the Hebrew fine-tune.
-_TRANSLITERATED_MIRROR = {"מיר", "מירור", "מירר"}
-# Repeats after the first two wake tokens are stripped only on these exact spellings.
+_TRANSLITERATED_MIRROR = {"מיר", "מירור", "מירר", "מירו"}
+# Repeats after the first wake token are stripped only on these exact spellings.
 _REPEAT_WORDS = {"mirror", "mirrors"} | _TRANSLITERATED_MIRROR | _HEBREW_VARIANTS
 _TAILS = (("on", "the", "wall"), ("שעל", "הקיר"), ("על", "הקיר"),
           # English "on the wall" in Hebrew letters (heard live: "מירר מירר על הוול")
@@ -55,9 +55,10 @@ def match_wake(text: str) -> "WakeMatch | None":
     if is_hallucination(text):
         return None
     tokens = normalize(text).split()
-    if len(tokens) < 2 or not (_is_wake_word(tokens[0]) and _is_wake_word(tokens[1])):
+    # One "mirror" / "מראה" wakes it: live, the first of two was often lost or garbled.
+    if not tokens or not _is_wake_word(tokens[0]):
         return None
-    rest = tokens[2:]
+    rest = tokens[1:]
     # ivrit-ai writes "mirror" up to 5 times. Only exact spellings count as repeats,
     # so a fuzzy near-miss ("error", "מורה") stays as the question's first word.
     while rest and rest[0] in _REPEAT_WORDS:
