@@ -185,6 +185,14 @@ lines[i:i] = ["%s=%s" % kv for kv in want.items()]
 open(path, "w").write("\n".join(lines) + "\n")
 PY
 sudo install -D -m 644 "$REPO/deploy/xorg/10-mirror.conf" /etc/X11/xorg.conf.d/10-mirror.conf
+# Drive 1920x1080@60 on the DP port in DVI mode (a passive DP-to-DVI cable to the
+# MSD300) whether or not the display answers: our own EDID, so a dead EDID chip on
+# the sending card (it happened: its AT24C04B) never leaves the Orin without a picture.
+sudo install -m 644 "$REPO/deploy/xorg/mirror-edid.bin" /etc/X11/mirror-edid.bin
+if ! grep -q '"ConnectedMonitor"' /etc/X11/xorg.conf; then
+    sudo cp -n /etc/X11/xorg.conf /etc/X11/xorg.conf.mirror-backup
+    sudo sed -i '/"AllowEmptyInitialConfiguration" "true"/a\    Option      "ConnectedMonitor" "DFP-1"\n    Option      "CustomEDID" "DFP-1:/etc/X11/mirror-edid.bin"\n    Option      "UseEDID" "true"' /etc/X11/xorg.conf
+fi
 # GNOME: no screen lock, no idle blanking or suspend, no notification banners.
 # System-wide dconf defaults, locked so a stray user setting can't undo them.
 if ! sudo grep -qs '^system-db:local' /etc/dconf/profile/user; then
