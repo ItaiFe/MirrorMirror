@@ -223,6 +223,20 @@ sudo tee /etc/dconf/db/local.d/locks/00-mirror >/dev/null <<'EOF'
 /org/gnome/desktop/notifications/show-banners
 EOF
 sudo dconf update
+# Windows that open over the face: the "Enable Ubuntu Pro" first-login wizard, the
+# update notifier and the "System program problem detected" (apport) crash dialog.
+echo yes > "$HOME/.config/gnome-initial-setup-done"
+mkdir -p "$HOME/.config/autostart"
+for app in gnome-initial-setup-first-login update-notifier; do
+    if [ -f "/etc/xdg/autostart/$app.desktop" ]; then
+        cp "/etc/xdg/autostart/$app.desktop" "$HOME/.config/autostart/"
+        echo "Hidden=true" >> "$HOME/.config/autostart/$app.desktop"
+    fi
+done
+if [ -f /etc/default/apport ]; then
+    sudo sed -i 's/^enabled=1/enabled=0/' /etc/default/apport
+    sudo systemctl disable --now apport.service 2>/dev/null || true
+fi
 
 step "7/8 spare the SD card: logs in RAM, no swap file"
 sudo install -d /etc/systemd/journald.conf.d
