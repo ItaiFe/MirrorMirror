@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
-"""Turn the ElevenLabs Hebrew dataset into a Piper fine-tuning set whose phonemes are
-exactly what the mirror feeds the Hebrew voice at runtime.
+"""Turn an ElevenLabs dataset into a Piper fine-tuning set whose phonemes are exactly
+what the mirror feeds the voice at runtime.
 
     .venv/bin/python tools/prepare_piper_dataset.py [--dataset dataset_he] [--out train_he]
-        [--voice-config models/phonikud-tts-he.onnx.json] [--g2p renikud | phonikud]
-        [--keep-flagged] [--no-copy-wavs]
+        [--voice-config models/phonikud-tts-he.onnx.json]
+        [--g2p renikud | phonikud | espeak-en] [--keep-flagged] [--no-copy-wavs]
+
+    # English (the lessac voice's own input: piper's espeak-ng, en-us):
+    .venv/bin/python tools/prepare_piper_dataset.py --g2p espeak-en \\
+        --dataset dataset_en --out train_en
 
 Reads DATASET/metadata.csv (LJSpeech: id|text) and DATASET/wavs/{id}.wav (16-bit mono,
 at the voice's sample rate). Each text goes through the same G2P as at runtime
@@ -13,6 +17,13 @@ filter (mirror.tts.keep_voice_symbols against the voice's phoneme_id_map), and t
 phonemes become ids exactly as piper does at runtime (BOS, PAD, each phoneme then PAD,
 EOS). Training on these ids with the checkpoint's own phoneme_id_map means the new voice
 takes the very same input as today's.
+
+--g2p espeak-en is the English voice (mirror.tts.PiperTTS, models/en_US-lessac-medium):
+the text goes through piper's own PiperVoice.phonemize (espeak-ng, the config's voice,
+en-us) and, as piper does at runtime, each sentence becomes its own BOS...EOS run of
+ids (piper synthesizes one chunk per sentence; piper's trainer chains them the same
+way). --voice-config then defaults to models/en_US-lessac-medium.onnx.json, --dataset
+to dataset_en, --out to train_en, and samples_ids.csv gets English lines.
 
 A clip is dropped (and listed in OUT/dropped.tsv) when: its wav is missing or not
 16-bit mono at the voice's rate; it is flagged in DATASET/check.tsv (non-empty flags
@@ -30,7 +41,8 @@ Writes to OUT (nothing in DATASET is changed):
   wavs/{id}.wav          kept clips (copied; --no-copy-wavs to skip)
   dropped.tsv            id, reason, detail
 
-The training side is deploy/train_piper_hebrew.sh; see docs/HEBREW_VOICE_TRAINING.md.
+The training side is deploy/train_piper_hebrew.sh (deploy/train_piper_english.sh for
+--g2p espeak-en); see docs/HEBREW_VOICE_TRAINING.md.
 """
 import argparse
 import csv
@@ -56,10 +68,18 @@ SAMPLE_SENTENCES = [
     "אל תפחד מהשאלה. תפחד מהתשובה שאתה כבר יודע.",
     "בשעה שבע וחצי בערב, השמש שוקעת מעל הים.",
 ]
+# The same for English (not in data/voice_en): short, simple words, the mirror's sass.
+SAMPLE_SENTENCES_EN = [
+    "Look at you, all dressed up and nowhere to go.",
+    "I know a secret about you, and I am not telling.",
+    "Ask me again, darling. I like it when you beg.",
+    "The stars say yes, but I say maybe.",
+    "Nice try, sweetie. Now show me your best side.",
+]
 
 
-def phoneme_ids(phonemes: str, id_map: dict) -> list[int]:
-    """Piper's phonemes_to_ids (piper/phoneme_ids.py), for a string of single-character
+def phoneme_ids(phonemes, id_map: dict) -> list[int]:
+    """Piper's phonemes_to_ids (piper/phoneme_ids.py), for a string (or list) of
     phonemes that are all in the map: BOS PAD, then each phoneme's ids and PAD, then EOS."""
     ids = list(id_map[BOS]) + list(id_map[PAD])
     for ph in phonemes:
@@ -127,18 +147,79 @@ def phonemize_clip(g2p, text: str, known) -> tuple[str | None, str, str]:
     return phonemes, "", ""
 
 
-def make_g2p(name: str, renikud_model: str, phonikud_model: str):
+def sentences_ids(sentences, id_map: dict) -> list[int]:
+    """Piper's runtime ids for a multi-sentence text: one BOS...EOS run per sentence,
+    chained (piper's trainer does the same for espeak voices)."""
+    ids = []
+    for sentence in sentences:
+        ids.extend(phoneme_ids(sentence, id_map))
+    return ids
+
+
+def phonemize_sentences(g2p, text: str, known) -> tuple[list | None, str, str]:
+    """Like phonemize_clip, for a G2P that splits sentences (EspeakEnglishG2P): (the
+    non-empty sentences' phoneme lists, reason, detail). No filter runs: piper feeds
+    the voice every phoneme espeak emits, so a clip with one outside the
+    phoneme_id_map (piper would skip it with a warning) is dropped instead."""
+    sentences = [list(s) for s in g2p.sentences(text) if s]  # piper skips empty ones
+    unknown = sorted({ph for s in sentences for ph in s} - set(known))
+    if unknown:
+        return None, "symbols not in phoneme_id_map", " ".join(repr(c) for c in unknown)
+    if not any(ph.strip() for s in sentences for ph in s):
+        return None, "empty phonemes", ""
+    return sentences, "", ""
+
+
+def clip_ids(g2p, text: str, known, id_map: dict) -> tuple[str | None, list, str, str]:
+    """(phonemes for reading, ids, reason, detail); phonemes is None for a dropped clip."""
+    if callable(getattr(g2p, "sentences", None)):
+        sentences, reason, detail = phonemize_sentences(g2p, text, known)
+        if sentences is None:
+            return None, [], reason, detail
+        return (" ".join("".join(s) for s in sentences), sentences_ids(sentences, id_map),
+                "", "")
+    phonemes, reason, detail = phonemize_clip(g2p, text, known)
+    if phonemes is None:
+        return None, [], reason, detail
+    return phonemes, phoneme_ids(phonemes, id_map), "", ""
+
+
+class EspeakEnglishG2P:
+    """English text -> piper's own phonemes for an espeak voice (models/en_US-lessac-
+    medium): PiperVoice.phonemize with that voice's config, the very code PiperTTS runs
+    (espeak-ng, the config's espeak voice and vowel clusters), without loading the onnx.
+    sentences(text) -> [[phoneme, ...] for each sentence]."""
+
+    def __init__(self, voice_config: str):
+        from piper import PiperVoice  # lazy: piper-tts and its bundled espeak-ng
+        from piper.config import PiperConfig
+
+        with open(voice_config, encoding="utf-8") as f:
+            config = PiperConfig.from_dict(json.load(f))
+        self._voice = PiperVoice(session=None, config=config)
+
+    def sentences(self, text: str) -> list[list[str]]:
+        return self._voice.phonemize(text)
+
+
+G2PS = ("renikud", "phonikud", "espeak-en")
+
+
+def make_g2p(name: str, renikud_model: str, phonikud_model: str, voice_config: str = ""):
+    if name == "espeak-en":
+        return EspeakEnglishG2P(voice_config)
     from mirror import tts  # lazy: onnxruntime and the G2P packages
 
     if name == "renikud":
         return tts.RenikudG2P(renikud_model)
     if name == "phonikud":
         return tts.PhonikudG2P(phonikud_model)
-    raise ValueError(f"unknown --g2p {name!r} (renikud | phonikud)")
+    raise ValueError(f"unknown --g2p {name!r} ({' | '.join(G2PS)})")
 
 
 def prepare(dataset: str, out: str, voice_config: str, g2p, keep_flagged: bool = False,
-            copy_wavs: bool = True, log=print) -> dict:
+            copy_wavs: bool = True, log=print, samples=None) -> dict:
+    """samples: the held-out lines for samples_ids.csv (default SAMPLE_SENTENCES)."""
     with open(voice_config, encoding="utf-8") as f:
         config = json.load(f)
     id_map = config["phoneme_id_map"]
@@ -165,11 +246,11 @@ def prepare(dataset: str, out: str, voice_config: str, g2p, keep_flagged: bool =
         if problem:
             dropped.append((sid, problem, ""))
             continue
-        phonemes, reason, detail = phonemize_clip(g2p, text, known)
+        phonemes, ids, reason, detail = clip_ids(g2p, text, known, id_map)
         if phonemes is None:
             dropped.append((sid, reason, detail))
             continue
-        kept.append((sid, text, phonemes, phoneme_ids(phonemes, id_map)))
+        kept.append((sid, text, phonemes, ids))
         seconds += dur
         used.update(phonemes)
         if copy_wavs:
@@ -193,10 +274,10 @@ def prepare(dataset: str, out: str, voice_config: str, g2p, keep_flagged: bool =
         json.dump(voice, f, ensure_ascii=False, indent=4)
     with open(os.path.join(out, "samples_ids.csv"), "w", encoding="utf-8", newline="") as f:
         w = csv.writer(f, delimiter="|", lineterminator="\n")
-        for n, text in enumerate(SAMPLE_SENTENCES, start=1):
-            phonemes, _reason, _detail = phonemize_clip(g2p, text, known)
+        for n, text in enumerate(SAMPLE_SENTENCES if samples is None else samples, start=1):
+            phonemes, ids, _reason, _detail = clip_ids(g2p, text, known, id_map)
             if phonemes:
-                w.writerow([f"sample_{n}", text, " ".join(map(str, phoneme_ids(phonemes, id_map)))])
+                w.writerow([f"sample_{n}", text, " ".join(map(str, ids))])
     with open(os.path.join(out, "dropped.tsv"), "w", encoding="utf-8", newline="") as f:
         w = csv.writer(f, delimiter="\t", lineterminator="\n")
         w.writerow(["id", "reason", "detail"])
@@ -228,12 +309,15 @@ def main(argv=None) -> int:
 
     d = TtsConfig()
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    p.add_argument("--dataset", default="dataset_he")
-    p.add_argument("--out", default="train_he")
-    p.add_argument("--voice-config", default=f"{d.phonikud_voice_he}.json",
-                   help="the checkpoint's voice config (its phoneme_id_map and rate)")
-    p.add_argument("--g2p", default=d.he_g2p, choices=["renikud", "phonikud"],
-                   help="must match tts.he_g2p of the mirror that will use the voice")
+    p.add_argument("--dataset", help="default dataset_he (dataset_en with --g2p espeak-en)")
+    p.add_argument("--out", help="default train_he (train_en with --g2p espeak-en)")
+    p.add_argument("--voice-config",
+                   help="the checkpoint's voice config (its phoneme_id_map and rate); "
+                   f"default {d.phonikud_voice_he}.json ({d.piper_voice_en}.json with "
+                   "--g2p espeak-en)")
+    p.add_argument("--g2p", default=d.he_g2p, choices=list(G2PS),
+                   help="Hebrew: must match tts.he_g2p of the mirror that will use the "
+                   "voice; espeak-en: the English (lessac) voice")
     p.add_argument("--renikud-model", default=d.renikud_model)
     p.add_argument("--phonikud-model", default=d.phonikud_model)
     p.add_argument("--keep-flagged", action="store_true",
@@ -241,12 +325,18 @@ def main(argv=None) -> int:
     p.add_argument("--no-copy-wavs", dest="copy_wavs", action="store_false",
                    help="don't copy the kept wavs into OUT/wavs")
     args = p.parse_args(argv)
-    if not os.path.exists(os.path.join(args.dataset, "metadata.csv")):
-        print(f"no {args.dataset}/metadata.csv", file=sys.stderr)
+    english = args.g2p == "espeak-en"
+    dataset = args.dataset or ("dataset_en" if english else "dataset_he")
+    out = args.out or ("train_en" if english else "train_he")
+    voice_config = args.voice_config or (
+        f"{d.piper_voice_en}.json" if english else f"{d.phonikud_voice_he}.json")
+    if not os.path.exists(os.path.join(dataset, "metadata.csv")):
+        print(f"no {dataset}/metadata.csv", file=sys.stderr)
         return 2
-    g2p = make_g2p(args.g2p, args.renikud_model, args.phonikud_model)
-    summary = prepare(args.dataset, args.out, args.voice_config, g2p,
-                      keep_flagged=args.keep_flagged, copy_wavs=args.copy_wavs)
+    g2p = make_g2p(args.g2p, args.renikud_model, args.phonikud_model, voice_config)
+    summary = prepare(dataset, out, voice_config, g2p,
+                      keep_flagged=args.keep_flagged, copy_wavs=args.copy_wavs,
+                      samples=SAMPLE_SENTENCES_EN if english else SAMPLE_SENTENCES)
     return 0 if summary["kept"] else 1
 
 

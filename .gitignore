@@ -7,3 +7,5 @@ __pycache__/
 .cache/
 dataset_he/
 train_he/
+dataset_en/
+train_en/
