@@ -104,7 +104,9 @@ def test_real_whisper_server_response(name, text, lang):
     # the language field carries the full name ("hebrew"), not the ISO code.
     body = (FIXTURES / name).read_text(encoding="utf-8")
     responses.post(URL + "/inference", body=body, content_type="application/json")
-    assert make().transcribe(SAMPLES) == Transcript(text, lang)
+    t = make().transcribe(SAMPLES)
+    assert (t.text, t.lang) == (text, lang)
+    assert isinstance(t.logprob, float) and t.logprob < 0  # whisper's confidence, kept
 
 
 @responses.activate
@@ -206,3 +208,18 @@ def test_default_language_comes_from_the_constructor():
     bodies = [c.request.body for c in responses.calls]
     assert b'name="language"\r\n\r\nhe' in bodies[0]
     assert b'name="language"\r\n\r\nen' in bodies[1]
+
+
+@responses.activate
+def test_logprob_is_the_mean_over_spoken_segments():
+    body = {"text": "a b", "language": "english", "segments": [
+        {"text": " a", "avg_logprob": -0.2}, {"text": " b", "avg_logprob": -0.6},
+        {"text": " ", "avg_logprob": -3.0}]}
+    responses.post(URL + "/inference", json=body)
+    assert make().transcribe(SAMPLES).logprob == pytest.approx(-0.4)
+
+
+@responses.activate
+def test_logprob_none_without_segments():
+    responses.post(URL + "/inference", json={"text": "hi", "language": "english"})
+    assert make().transcribe(SAMPLES).logprob is None

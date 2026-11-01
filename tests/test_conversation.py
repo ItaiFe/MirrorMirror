@@ -1321,3 +1321,13 @@ def test_a_one_word_scrap_in_the_conversation_is_ignored():
     assert p["llm"].calls == [] and ctl.state == State.LISTENING
     ctl.on_segment(SEG)
     assert [c[1] for c in p["llm"].calls] == ["מה שלומך היום"]
+
+
+def test_unsure_transcripts_are_ignored():
+    cfg = ConversationConfig(min_logprob=-1.0)
+    ctl, p, _ = make([Transcript("מראה, מה העתיד שלי", "he", logprob=-1.4),
+                      Transcript("מראה, מה העתיד שלי", "he", logprob=-0.3)], cfg=cfg)
+    ctl.on_segment(SEG)  # garbled: ignored, still idle
+    assert ctl.state == State.IDLE and p["llm"].calls == []
+    ctl.on_segment(SEG)
+    assert [c[1] for c in p["llm"].calls] == ["מה העתיד שלי"]

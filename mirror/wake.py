@@ -7,7 +7,8 @@ from difflib import SequenceMatcher
 _THRESHOLD = 0.75
 # Looser for "mirror" itself: ivrit-ai's Whisper turbo writes "mirer" (0.73).
 _MIRROR_THRESHOLD = 0.7
-_HEBREW_VARIANTS = {"מראה", "מראא", "מרא", "מירא"}
+# Hebrew only by these exact spellings: a near-miss is a real word ("תראה", look!)
+_HEBREW_VARIANTS = {"מראה", "המראה", "ומראה", "מראא", "מרא", "מירא"}
 # English "mirror" transliterated into Hebrew letters by the Hebrew fine-tune.
 _TRANSLITERATED_MIRROR = {"מיר", "מירור", "מירר", "מירו"}
 # Repeats after the first wake token are stripped only on these exact spellings.
@@ -41,7 +42,7 @@ def _close(a: str, b: str, threshold: float = _THRESHOLD) -> bool:
 
 def _is_wake_word(token: str) -> bool:
     return (_close(token, "mirror", _MIRROR_THRESHOLD) or token in _TRANSLITERATED_MIRROR
-            or token in _HEBREW_VARIANTS or _close(token, "מראה"))
+            or token in _HEBREW_VARIANTS)
 
 
 def is_hallucination(text: str) -> bool:

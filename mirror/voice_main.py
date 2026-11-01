@@ -436,7 +436,7 @@ def run(cfg: Config, wav_path=None, config_path=None) -> int:
         _push_idle(raw_lights, face)
         gate = AnswerGate(raw_lights, ambient=bed)
 
-        vad = SileroVad(os.path.join(models_dir, "silero_vad.onnx"))
+        vad = SileroVad(os.path.join(models_dir, "silero_vad.onnx"), cfg.audio.vad_threshold)
         segmenter = Segmenter(vad, frame_samples=CHUNK, sample_rate=cfg.audio.sample_rate)
         stt = WhisperServerSTT(cfg.servers.stt_url, cfg.servers.timeout_s,
                                cfg.servers.stt_language)

@@ -3,6 +3,7 @@ models_dir = "models"   # silero_vad.onnx + Hugging Face cache (hf/)
 
 [audio]
 sample_rate = 16000
+vad_threshold = 0.7         # Silero speech probability needed (0.5 default): less music taken as speech
 
 [servers]
 stt_url = "http://127.0.0.1:8081"
@@ -65,6 +66,7 @@ frequency_penalty = 0.3
 listen_timeout_s = 60.0   # after the greeting: this long for a question; then the wake word again
 followup_s = 60.0         # after an answer: follow-ups need no wake word for this long
 greeting_enabled = true   # "שלום, עובר אורח" / "Hello, stranger." on waking
+min_logprob = -1.0        # ignore what whisper was unsure of (garbled music, noise)
 max_reply_sentences = 2
 max_reply_chars = 170
 filler_enabled = true      # a short pre-synthesized line while the LLM thinks

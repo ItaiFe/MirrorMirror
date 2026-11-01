@@ -35,6 +35,9 @@ class STTError(Exception):
 class Transcript:
     text: str
     lang: str  # "he" or "en"
+    # whisper's mean log-probability over the segments: how sure it was of the words
+    # (garbled music decodes low); None if the server did not report one
+    logprob: "float | None" = None
 
 
 def _to_wav_bytes(samples: np.ndarray, sr: int) -> bytes:
@@ -91,4 +94,11 @@ class WhisperServerSTT:
             # case- and region-blind: "HE", "he-IL" and "he_IL" are all Hebrew
             code = str(server).strip().lower().replace("_", "-").split("-")[0]
             lang = "he" if code in _HEBREW else "en"
-        return Transcript(text, lang)
+        return Transcript(text, lang, _mean_logprob(payload))
+
+
+def _mean_logprob(payload: dict) -> "float | None":
+    probs = [s.get("avg_logprob") for s in payload.get("segments") or []
+             if isinstance(s, dict) and (s.get("text") or "").strip()]
+    probs = [float(p) for p in probs if isinstance(p, (int, float))]
+    return sum(probs) / len(probs) if probs else None

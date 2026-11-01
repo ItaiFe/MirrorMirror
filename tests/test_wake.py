@@ -43,7 +43,9 @@ def test_matches(text, rem):
 
 
 @pytest.mark.parametrize("text", ["the mirror is nice", "hello there", "מה קורה", "",
-                                  "a mirror mirror", "אמר אשר על הקיר"])
+                                  "a mirror mirror", "אמר אשר על הקיר",
+                                  # near-misses that are real Hebrew words don't wake it
+                                  "תראה בגדול אפשר להביא עוד שניים", "מראש", "מורה"])
 def test_no_match(text):
     assert match_wake(text) is None
 

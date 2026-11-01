@@ -19,6 +19,7 @@ class AudioConfig:
     # louder than the voice and music as they are: everything played is raised by this
     # much, and a soft limiter rounds off the peaks instead of clipping them
     output_gain_db: float = 0.0
+    vad_threshold: float = 0.5  # Silero speech probability needed; higher: less music heard as speech
 
 
 @dataclass
@@ -111,6 +112,9 @@ class ConversationConfig:
     listen_timeout_s: float = 8.0
     followup_s: float = 6.0
     greeting_enabled: bool = False  # say persona.GREETING when woken
+    # transcripts whisper was this unsure of (mean log-probability) are ignored: garbled
+    # music and noise; None: keep everything
+    min_logprob: Optional[float] = None
     max_reply_sentences: int = 3
     max_reply_chars: int = 300
     filler_enabled: bool = True     # speak a short filler line while the LLM thinks

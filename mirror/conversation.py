@@ -222,8 +222,14 @@ class Controller:
         except STTError as e:
             log.warning("stt failed: %s", e)
             return  # stay in the resting state we were in
-        log.info("heard (%s, in %s): %r", transcript.lang, self._state.value, transcript.text)
+        log.info("heard (%s, in %s, logprob %s): %r", transcript.lang, self._state.value,
+                 "?" if transcript.logprob is None else f"{transcript.logprob:.2f}",
+                 transcript.text)
         if is_hallucination(transcript.text):
+            return
+        floor = self._cfg.min_logprob
+        if floor is not None and transcript.logprob is not None and transcript.logprob < floor:
+            log.info("ignored (unsure, logprob %.2f < %.2f)", transcript.logprob, floor)
             return
         wake = match_wake(transcript.text)
         if wake is not None:
