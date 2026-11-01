@@ -80,8 +80,8 @@ laugh_chance = 0.33         # the share of idle lures that are the laugh
 [ambient]
 enabled = true
 file = "models/ambient_loop.wav"   # the background loop (16-bit WAV); not in git
-volume_db = -12.0      # idle: clearly present (dB on the file as mastered)
-listening_db = -10.0   # after the wake phrase, relative to idle
+volume_db = -6.0       # idle: clearly present (dB on the file as mastered)
+listening_db = -6.0    # in a conversation (the minute after the wake word), relative to idle
 answering_db = -24.0   # thinking and speaking, relative to idle: barely there
 fade_s = 1.5           # each level change fades over this long
 quiet_hours = []       # "HH:MM-HH:MM" windows with no background music
