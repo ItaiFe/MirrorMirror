@@ -221,6 +221,35 @@ FILLERS: dict[str, list[str]] = {
         "I'm melting out here, darlings…",
         "Wait, I'm practising my dramatic stare…",
         "Oh dear, another question…",
+        # teasing the visitor
+        "Ooh, look who's curious…",
+        "Honey, you really want to know that?",
+        "Bold question. I like you already…",
+        "Sweetie, you're blocking my light…",
+        "Ask me again, but slower…",
+        "Oh, you came prepared…",
+        # drama
+        "Hold the applause, I'm thinking…",
+        "Lights, please… I'm having a moment…",
+        "Drumroll, darlings…",
+        "Don't rush genius, honey…",
+        "One second, I'm channelling my inner diva…",
+        "Stop staring, I'm concentrating…",
+        # flirting
+        "Mmm, and who are you, gorgeous…",
+        "Careful, I might fall for you…",
+        "Ooh, you smell like adventure…",
+        # mock mysticism
+        "Hmm, the glass is foggy today…",
+        "Wait, I see something… oh, it's dust…",
+        "The spirits say… hold on, wrong number…",
+        "Let me consult my reflection…",
+        "Hmm, the stars are being difficult…",
+        # plain sass
+        "Ugh, fine. I'll answer…",
+        "Oh, you're serious…",
+        "Give me a second, I'm not a search engine…",
+        "Hmm, let me think about it, darling…",
     ],
     "he": [
         "מאמי, מה זה הוודג' הזה…",

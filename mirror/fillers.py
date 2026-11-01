@@ -25,11 +25,12 @@ class FillerBank:
         self._clips: dict[str, list[Clip]] = {}
         self._last: dict[str, int] = {}
         self._deck: dict[str, list[int]] = {}  # the clips not yet played this round
+        self._texts: dict[str, list[str]] = {}  # the line of each prepared clip
 
     def prepare(self) -> None:
         """Synthesize every line (once, at startup). A line that fails is skipped."""
         for lang, lines in self._lines.items():
-            clips = []
+            clips, texts = [], []
             for text in lines:
                 try:
                     samples, sr, track = self._tts.synth_visemes(text, lang)
@@ -42,7 +43,9 @@ class FillerBank:
                     log.warning("%s (%s) is %.1f s, over the %.1f s budget: %r",
                                 self._kind, lang, seconds, self._max_clip_s, text)
                 clips.append((samples, sr, track))
+                texts.append(text)
             self._clips[lang] = clips
+            self._texts[lang] = texts
 
     def languages(self) -> list[str]:
         """The languages that have at least one prepared clip."""
@@ -64,4 +67,5 @@ class FillerBank:
             self._deck[lang] = deck
         i = deck.pop()
         self._last[lang] = i
+        log.info("%s (%s): %r", self._kind, lang, self._texts.get(lang, [""] * len(clips))[i])
         return clips[i]
