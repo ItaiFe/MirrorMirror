@@ -66,6 +66,7 @@ frequency_penalty = 0.3
 listen_timeout_s = 60.0   # after the greeting: this long for a question; then the wake word again
 followup_s = 60.0         # after an answer: follow-ups need no wake word for this long
 greeting_enabled = true   # "שלום, עובר אורח" / "Hello, stranger." on waking
+reply_language = "en"     # always answer in English (Hebrew is still understood); "auto": the visitor's
 min_logprob = -1.0        # ignore what whisper was unsure of (garbled music, noise)
 max_reply_sentences = 2
 max_reply_chars = 170

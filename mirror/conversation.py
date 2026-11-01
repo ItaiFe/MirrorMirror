@@ -169,7 +169,8 @@ class Controller:
             self._next_lure_at = now + self._draw_lure_wait()
             if self._laugh is not None and self._rng.random() < self._cfg.laugh_chance:
                 return "laugh", self._laugh
-            lang = self._rng.choice(sorted(langs))
+            fixed = self._cfg.reply_language
+            lang = fixed if fixed in langs else self._rng.choice(sorted(langs))
             clip = self._lures.pick(lang)
             return None if clip is None else (lang, clip)
         except Exception:
@@ -250,7 +251,7 @@ class Controller:
             # woken: greet first; from now on no wake word is needed until the
             # conversation goes quiet (listen_timeout_s / followup_s)
             if self._cfg.greeting_enabled:
-                self._greet("en" if transcript.lang == "en" else "he")
+                self._greet(self._speak_lang(transcript.lang))
         else:  # LISTENING
             text = transcript.text if wake is None else wake.remainder
             if wake is None and len(normalize(text).split()) < MIN_FOLLOWUP_WORDS:
@@ -258,7 +259,7 @@ class Controller:
                 return
         self._mark_interaction()
         if text:
-            self._answer(text, transcript.lang)
+            self._answer(text, self._speak_lang(transcript.lang))
         else:
             self._listen(self._cfg.listen_timeout_s)
 
@@ -424,6 +425,13 @@ class Controller:
                     return
         except Exception as e:  # noqa: BLE001 - handed to the controller thread
             _put(clips, e, cancel)
+
+    def _speak_lang(self, heard: str) -> str:
+        """The language to answer in: the visitor's, unless reply_language fixes it."""
+        fixed = self._cfg.reply_language
+        if fixed != "auto":
+            return fixed
+        return "en" if heard == "en" else "he"
 
     def _greet(self, lang: str) -> None:
         """Say hello; a failure is logged and the conversation goes on without it."""

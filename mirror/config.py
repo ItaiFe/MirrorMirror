@@ -112,6 +112,9 @@ class ConversationConfig:
     listen_timeout_s: float = 8.0
     followup_s: float = 6.0
     greeting_enabled: bool = False  # say persona.GREETING when woken
+    # the language the mirror speaks: "auto" (the visitor's), or "en" / "he" always
+    # (it still understands both); also the greeting, fillers and idle lures
+    reply_language: str = "auto"
     # transcripts whisper was this unsure of (mean log-probability) are ignored: garbled
     # music and noise; None: keep everything
     min_logprob: Optional[float] = None
@@ -133,6 +136,9 @@ class ConversationConfig:
     laugh_chance: float = 0.33
 
     def __post_init__(self):
+        if self.reply_language not in ("auto", "en", "he"):
+            raise ValueError(f"conversation.reply_language must be auto, en or he "
+                             f"(got {self.reply_language!r})")
         if not 0.0 <= self.laugh_chance <= 1.0:
             raise ValueError(f"conversation.laugh_chance must be 0..1 (got {self.laugh_chance})")
 

@@ -1331,3 +1331,27 @@ def test_unsure_transcripts_are_ignored():
     assert ctl.state == State.IDLE and p["llm"].calls == []
     ctl.on_segment(SEG)
     assert [c[1] for c in p["llm"].calls] == ["מה העתיד שלי"]
+
+
+def test_reply_language_en_answers_hebrew_in_english():
+    from mirror.persona import GREETING
+
+    cfg = ConversationConfig(greeting_enabled=True, reply_language="en")
+    ctl, p, _ = make([Transcript("מראה, מה העתיד שלי", "he")], cfg=cfg)
+    ctl.on_segment(SEG)
+    assert p["tts"].calls[0] == (GREETING["en"], "en")
+    assert p["llm"].calls == [([], "מה העתיד שלי", "en")]  # the Hebrew question, answered in English
+
+
+def test_reply_language_en_lures_in_english():
+    cfg = ConversationConfig(**LURE_CFG, reply_language="en")
+    ctl, p, clock, lures, _ = make_lured(cfg=cfg)
+    for _ in range(4):
+        clock.t += 180
+        ctl.tick()
+    assert lures.picks == ["en"] * 4
+
+
+def test_reply_language_is_validated():
+    with pytest.raises(ValueError):
+        ConversationConfig(reply_language="fr")
