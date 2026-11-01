@@ -66,6 +66,24 @@ def server_unreachable(e: BaseException) -> bool:
     return isinstance(e.__cause__, requests.exceptions.ConnectionError)
 
 
+# A filler opener the small model can't stop using ("Honestly, darling, ..."): cut so
+# every answer starts with the answer itself. A pet name later in the sentence stays.
+_OPENER = re.compile(
+    r"^\s*(?:(?:honestly|oh|well|okay|ok|so)\s*[,!.…-]*\s+)?"
+    r"(?:(?:my\s+)?(?:darling|honey|sweetie|babe|gorgeous|dear|sweetheart)\s*[,!.…-]+\s*)",
+    re.IGNORECASE)
+_LEAD_WORD = re.compile(r"^\s*(?:honestly|oh)\s*[,!.…-]+\s*", re.IGNORECASE)
+
+
+def strip_opener(sentence: str) -> str:
+    """'Honestly, darling, you want...' -> 'You want...'; unchanged if too little is left."""
+    for pattern in (_OPENER, _LEAD_WORD):
+        rest = pattern.sub("", sentence, count=1)
+        if rest != sentence and len(rest.split()) >= 2:
+            sentence = rest[0].upper() + rest[1:]
+    return sentence
+
+
 def _spoken_part(text: str) -> str:
     """The part of a THINK/SAY reply that is spoken: after "SAY:"; without one, the
     text minus a leading THINK line (a model that skipped the format is spoken as is)."""
@@ -277,8 +295,8 @@ class LlamaServerLLM:
             raise LLMError(f"llama-server request failed: {e}") from e
         except (ValueError, KeyError, IndexError, TypeError) as e:  # bad JSON shape
             raise LLMError(f"malformed llama-server response: {e}") from e
-        text = trim_reply(_spoken_part(str(content)).strip(), self._max_sentences,
-                          self._max_chars)
+        text = trim_reply(strip_opener(_spoken_part(str(content)).strip()),
+                          self._max_sentences, self._max_chars)
         if not text:
             raise LLMError("llama-server returned an empty reply")
         return text
@@ -300,6 +318,8 @@ class LlamaServerLLM:
         try:
             for sentence in raw:
                 sentence = _clean_sentence(sentence)
+                if sentence and not yielded:
+                    sentence = strip_opener(sentence)
                 if not sentence:
                     continue
                 room = self._max_chars - total - (1 if yielded else 0)

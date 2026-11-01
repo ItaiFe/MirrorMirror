@@ -23,7 +23,7 @@ import numpy as np
 
 from mirror.config import ConversationConfig
 from mirror.llm import LLMError, server_unreachable
-from mirror.persona import FALLBACK, GREETING, SYSTEM_PROMPT, pick_angle
+from mirror.persona import FALLBACK, GOODBYES, GREETINGS, SYSTEM_PROMPT, pick_angle
 from mirror.states import State
 from mirror.stt import STTError, Transcript
 from mirror.visemes import rms_shape
@@ -79,6 +79,8 @@ class Controller:
         self._lures = lures  # FillerBank of LURES or None
         self._laugh = laugh  # (samples, sr, None): sometimes played instead of a lure
         self._transcript = transcript  # ConversationLog or None: every exchange, as text
+        self._last_said: dict[str, str] = {}  # the last greeting / goodbye, not repeated
+        self._conv_lang = "en"  # the language of the current conversation (for the goodbye)
         self._wall_clock = wall_clock
         self._rng = rng or random.Random()
         self._quiet_hours = parse_quiet_hours(cfg.lure_quiet_hours)
@@ -125,12 +127,26 @@ class Controller:
             self._busy = False
 
     def tick(self) -> None:
+        goodbye = False
         with self._lock:
             if self._busy:
                 return
             if self._state == State.LISTENING and self._clock() >= self._deadline:
                 log.info("listening timed out")
+                if self._cfg.goodbye_enabled:
+                    self._busy = goodbye = True  # segments are dropped while it plays
+                else:
+                    self._go_idle()
+        if goodbye:  # said outside the lock, like a lure
+            try:
+                self._say_from(GOODBYES, self._conv_lang, "goodbye")
+            finally:
                 self._go_idle()
+                self._busy = False
+            return
+        with self._lock:
+            if self._busy:
+                return
             self._maybe_rewarm()
             lure = self._due_lure()
             if lure is None:
@@ -251,8 +267,9 @@ class Controller:
             text = wake.remainder
             # woken: greet first; from now on no wake word is needed until the
             # conversation goes quiet (listen_timeout_s / followup_s)
+            self._conv_lang = self._speak_lang(transcript.lang)
             if self._cfg.greeting_enabled:
-                self._greet(self._speak_lang(transcript.lang))
+                self._greet(self._conv_lang)
         else:  # LISTENING
             text = transcript.text if wake is None else wake.remainder
             if wake is None and len(normalize(text).split()) < MIN_FOLLOWUP_WORDS:
@@ -445,10 +462,21 @@ class Controller:
 
     def _greet(self, lang: str) -> None:
         """Say hello; a failure is logged and the conversation goes on without it."""
+        self._say_from(GREETINGS, lang, "greeting")
+
+    def _say_from(self, lines_by_lang: dict, lang: str, kind: str) -> None:
+        """Speak one line of lines_by_lang[lang] at random, never the one said last time;
+        a failure is logged, never raised."""
+        lines = lines_by_lang.get(lang) or lines_by_lang.get("en") or []
+        if not lines:
+            return
+        last = self._last_said.get(kind)
+        line = self._rng.choice([l for l in lines if l != last] or lines)
+        self._last_said[kind] = line
         try:
-            self._speak(GREETING[lang], lang)
+            self._speak(line, lang)
         except Exception:
-            log.exception("greeting failed")
+            log.exception("%s failed", kind)
 
     def _speak(self, text: str, lang: str) -> None:
         samples, sr, track = self._tts.synth_visemes(text, lang)

@@ -703,3 +703,25 @@ def test_examples_show_the_think_say_format_in_both_languages():
     for lang in ("en", "he"):
         prompt = system_prompt(lang, "W", NOW)
         assert "\nTHINK: " in prompt and "\nSAY: " in prompt
+
+
+@pytest.mark.parametrize("raw, spoken", [
+    ("Honestly, darling, you want to know where the toilets are?",
+     "You want to know where the toilets are?"),
+    ("Darling, you look tired.", "You look tired."),
+    ("Oh, darling! That's so sad.", "That's so sad."),
+    ("Honestly? A bleak one.", "Honestly? A bleak one."),  # nothing safe to cut
+    ("Yes, darling, absolutely.", "Yes, darling, absolutely."),  # a pet name later stays
+    ("Darling!", "Darling!"),  # too little would be left
+])
+def test_strip_opener(raw, spoken):
+    from mirror.llm import strip_opener
+
+    assert strip_opener(raw) == spoken
+
+
+def test_stream_strips_the_opener_of_the_first_sentence_only():
+    with patch("mirror.llm.requests.post",
+               return_value=_sse("SAY: Honestly, darling, no idea. ", "Darling, ask a human.")):
+        out = list(LlamaServerLLM("http://x", 5).reply_stream([], "hi", "en"))
+    assert out == ["No idea.", "Darling, ask a human."]

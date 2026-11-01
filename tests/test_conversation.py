@@ -1263,7 +1263,7 @@ def test_wake_alone_greets_in_hebrew_then_listens():
 
     ctl, p, _ = make([Transcript("מראה", "he")], cfg=ConversationConfig(**GREET_CFG))
     ctl.on_segment(SEG)
-    assert p["tts"].calls == [(GREETING["he"], "he")]
+    assert p["tts"].calls == [(GREETING["he"], "he")]  # Hebrew has one greeting
     assert ctl.state == State.LISTENING and p["llm"].calls == []
 
 
@@ -1273,7 +1273,10 @@ def test_english_wake_with_question_greets_then_answers():
     ctl, p, _ = make([Transcript("Mirror, who is fairest?", "en")],
                      cfg=ConversationConfig(**GREET_CFG))
     ctl.on_segment(SEG)
-    assert p["tts"].calls == [(GREETING["en"], "en"), ("Thou art fairest.", "en")]
+    from mirror.persona import GREETINGS
+
+    (greeting, lang), answer = p["tts"].calls
+    assert greeting in GREETINGS["en"] and lang == "en" and answer == ("Thou art fairest.", "en")
     assert p["llm"].calls == [([], "who is fairest", "en")]
 
 
@@ -1339,7 +1342,9 @@ def test_reply_language_en_answers_hebrew_in_english():
     cfg = ConversationConfig(greeting_enabled=True, reply_language="en")
     ctl, p, _ = make([Transcript("מראה, מה העתיד שלי", "he")], cfg=cfg)
     ctl.on_segment(SEG)
-    assert p["tts"].calls[0] == (GREETING["en"], "en")
+    from mirror.persona import GREETINGS
+
+    assert p["tts"].calls[0][0] in GREETINGS["en"] and p["tts"].calls[0][1] == "en"
     assert p["llm"].calls == [([], "מה העתיד שלי", "en")]  # the Hebrew question, answered in English
 
 
@@ -1368,3 +1373,33 @@ def test_every_exchange_is_saved():
     ctl._transcript = Log()
     ctl.on_segment(SEG)
     assert saved == [("who is fairest", "Thou art fairest.", "en", {})]
+
+
+def test_greetings_rotate_without_repeating():
+    from mirror.persona import GREETINGS
+
+    cfg = ConversationConfig(greeting_enabled=True, reply_language="en", listen_timeout_s=1)
+    ctl, p, clock = make([Transcript("mirror", "en")] * 12, cfg=cfg)
+    said = []
+    for _ in range(12):
+        ctl.on_segment(SEG)
+        said.append(p["tts"].calls[-1][0])
+        clock.t += 2
+        ctl.tick()  # back to idle, so the next "mirror" greets again
+    assert all(g in GREETINGS["en"] for g in said)
+    assert all(a != b for a, b in zip(said, said[1:])) and len(set(said)) > 3
+
+
+def test_goodbye_when_the_conversation_goes_quiet():
+    from mirror.persona import GOODBYES
+
+    cfg = ConversationConfig(greeting_enabled=True, goodbye_enabled=True, reply_language="en",
+                             listen_timeout_s=60, followup_s=60)
+    ctl, p, clock = make([Transcript("mirror", "en")], cfg=cfg)
+    ctl.on_segment(SEG)
+    clock.t += 59
+    ctl.tick()
+    assert ctl.state == State.LISTENING and len(p["tts"].calls) == 1  # just the greeting
+    clock.t += 2
+    ctl.tick()
+    assert p["tts"].calls[-1][0] in GOODBYES["en"] and ctl.state == State.IDLE

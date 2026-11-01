@@ -72,7 +72,8 @@ frequency_penalty = 0.3
 [conversation]
 listen_timeout_s = 60.0   # after the greeting: this long for a question; then the wake word again
 followup_s = 60.0         # after an answer: follow-ups need no wake word for this long
-greeting_enabled = true   # "שלום, עובר אורח" / "Hello, stranger." on waking
+greeting_enabled = true   # a hello on waking (persona.GREETINGS, "Hello, stranger." among them)
+goodbye_enabled = true    # a goodbye when the conversation goes quiet for listen_timeout_s / followup_s
 reply_language = "en"     # always answer in English (Hebrew is still understood); "auto": the visitor's
 transcript_dir = "/home/mirror/mirror-conversations"   # every exchange as text, one file per day (no audio)
 min_logprob = -1.0        # ignore what whisper was unsure of (garbled music, noise)

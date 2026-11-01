@@ -116,7 +116,8 @@ class LightsConfig:
 class ConversationConfig:
     listen_timeout_s: float = 8.0
     followup_s: float = 6.0
-    greeting_enabled: bool = False  # say persona.GREETING when woken
+    greeting_enabled: bool = False  # say one of persona.GREETINGS when woken
+    goodbye_enabled: bool = False   # say one of persona.GOODBYES when a conversation goes quiet
     # the language the mirror speaks: "auto" (the visitor's), or "en" / "he" always
     # (it still understands both); also the greeting, fillers and idle lures
     reply_language: str = "auto"

@@ -88,12 +88,10 @@ def test_languages_lists_only_languages_with_clips():
 def test_lure_copy():
     from mirror.persona import LURES, singular_address
 
-    assert LURES["en"] == [
-        "Psst, gorgeous! Yes, you. Come closer, I don't bite… much.",
+    assert LURES["en"][:2] == [
+        "Psst, gorgeous! Yes, you. Come closer, Mira doesn't bite… much.",
         "Darling, I've been standing here all day. Come entertain me!",
-        "Say \"mirror\", and I'll tell you the truth. Brace yourself.",
-        "Who wants the truth? Come closer, honey.",
-    ]
+    ] and len(LURES["en"]) == 6
     assert LURES["he"] == [
         "פססט, מהממים! כן, אתם. בואו, אני לא נושכת… הרבה.",
         "מאמי, אני עומדת פה כל היום. בואו לבדר אותי!",
