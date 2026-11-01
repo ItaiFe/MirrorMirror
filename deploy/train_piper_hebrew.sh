@@ -20,6 +20,7 @@
 # Written for Ubuntu 22.04/24.04 + an NVIDIA GPU with a recent driver (RunPod/Lambda
 # PyTorch images are fine). It has NOT been run end to end; see the UNVERIFIED notes.
 # Run it inside tmux (`tmux new -s train`) so a dropped ssh doesn't kill training.
+# deploy/train_piper_english.sh runs this same script with the English settings.
 set -euo pipefail
 
 # ---- settings (override any of them from the environment) ---------------------------
@@ -31,7 +32,10 @@ CKPT_REPO="${CKPT_REPO:-https://huggingface.co/Phonikud/phonikud-tts-checkpoints
 # (model.onnx, sha256 dfe0a8f3...). 846 MB.
 CKPT_FILE="${CKPT_FILE:-epoch=4842-step=3124000.ckpt}"
 CKPT_SHA256="${CKPT_SHA256:-36b9658dfcd8609d926bc75c6b765a8b68c0501cd1ef9dde97353c42169294fd}"
+CKPT_EPOCH="${CKPT_EPOCH:-4842}"               # the checkpoint's epoch (START_MODE=resume)
 VOICE_NAME="${VOICE_NAME:-he_IL-oracle-medium}"
+ESPEAK_VOICE="${ESPEAK_VOICE:-he}"             # --data.espeak_voice (unused with phoneme ids)
+PREP_OUT="${PREP_OUT:-train_he}"               # what prepare_piper_dataset.py wrote on the Mac
 RUN_DIR="${RUN_DIR:-$WORK/run}"                # lightning_logs/, checkpoints, tensorboard
 OUT_DIR="${OUT_DIR:-$WORK/out}"                # exported voice + samples
 # START_MODE=warmstart: copy the checkpoint's weights, fresh optimizer, epochs count
@@ -118,7 +122,7 @@ print('torch', torch.__version__, torch.cuda.get_device_name(0))"
 
 check_data() {
     for f in metadata_ids.csv phoneme_id_map.json config.json wavs; do
-        [ -e "$DATA_DIR/$f" ] || { echo "missing $DATA_DIR/$f: run tools/prepare_piper_dataset.py and rsync train_he/ here" >&2; exit 1; }
+        [ -e "$DATA_DIR/$f" ] || { echo "missing $DATA_DIR/$f: run tools/prepare_piper_dataset.py and rsync $PREP_OUT/ here" >&2; exit 1; }
     done
     echo "$(wc -l < "$DATA_DIR/metadata_ids.csv") clips in $DATA_DIR"
 }
@@ -127,8 +131,8 @@ train() {
     check_data
     [ -x "$PY" ] || { echo "run setup first" >&2; exit 1; }
     local start=() resume epochs="$MAX_EPOCHS"
-    # A full resume restores the base run's epoch counter (4842), so count on from it.
-    [ "$START_MODE" = resume ] && epochs="$((4843 + MAX_EPOCHS))"
+    # A full resume restores the base run's epoch counter (CKPT_EPOCH), so count on from it.
+    [ "$START_MODE" = resume ] && epochs="$((CKPT_EPOCH + 1 + MAX_EPOCHS))"
     resume="$(latest_ckpt)"
     if [ -n "$resume" ]; then
         # Our own run was interrupted: carry on from its newest checkpoint. (Never pass
@@ -164,7 +168,7 @@ train() {
         --data.dataset_type phoneme_ids \
         --data.phonemes_path "$DATA_DIR/phoneme_id_map.json" \
         --data.num_symbols 256 \
-        --data.espeak_voice he \
+        --data.espeak_voice "$ESPEAK_VOICE" \
         --data.cache_dir "$WORK/cache" \
         --data.config_path "$RUN_DIR/piper_config.json" \
         --data.batch_size "$BATCH_SIZE" \
