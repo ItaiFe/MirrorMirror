@@ -16,6 +16,9 @@ class AudioConfig:
     # several devices match input_device/output_device: prefer one that converts
     # formats (ALSA plughw, PulseAudio/PipeWire, "default") over a raw hw: device
     prefer_alsa_plug: bool = True
+    # louder than the voice and music as they are: everything played is raised by this
+    # much, and a soft limiter rounds off the peaks instead of clipping them
+    output_gain_db: float = 0.0
 
 
 @dataclass

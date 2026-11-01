@@ -27,6 +27,21 @@ WRITE_CHUNK_S = 0.05  # playback is written in short blocks so it can be stopped
 MIC_READ_TIMEOUT_S = 2.0  # no audio for this long: the mic has stalled
 PLAY_JOIN_GRACE_S = 2.0  # the writer may lag the clip's length by this much
 BED_JOIN_S = 1.0  # the ambient writer finishes its block within this when stopped
+LIMIT_KNEE = 0.7  # above this level the soft limiter rounds the peaks off
+
+
+def soft_limit(x: np.ndarray, knee: float = LIMIT_KNEE) -> np.ndarray:
+    """Leave samples under the knee alone and round anything above it smoothly
+    towards 1.0, so added gain never hard-clips."""
+    x = np.asarray(x, dtype=np.float32)
+    mag = np.abs(x)
+    over = mag > knee
+    if not over.any():
+        return x
+    out = x.copy()
+    room = 1.0 - knee
+    out[over] = np.sign(x[over]) * (knee + room * np.tanh((mag[over] - knee) / room))
+    return out
 
 log = logging.getLogger("mirror.audio")
 
@@ -254,8 +269,9 @@ class Player:
     and the bed thread is stopped before the stream is closed or aborted.
     """
 
-    def __init__(self, device: Optional[int], bed=None):
+    def __init__(self, device: Optional[int], bed=None, gain_db: float = 0.0):
         self.device = device
+        self._gain = float(10.0 ** (gain_db / 20.0))  # on everything played, then soft_limit
         self._stream = None
         self._rate: Optional[int] = None  # the clip rate the stream was opened for
         self._out_rate: Optional[int] = None  # the device's rate
@@ -305,7 +321,7 @@ class Player:
                     continue
                 block = self._bed.render(chunk, rate)
                 try:
-                    stream.write(_to_channels(block, channels))
+                    stream.write(_to_channels(self._finish(block), channels))
                 except Exception as e:  # noqa: BLE001 - the next clip reopens the stream
                     log.warning("ambient write failed (%s: %s); background music paused",
                                 type(e).__name__, e)
@@ -382,9 +398,8 @@ class Player:
                     block = data[i:i + chunk]
                     with self._io:
                         if bed is not None:
-                            block = np.clip(block + bed.render(len(block), out_rate)[:, None],
-                                            -1.0, 1.0).astype(np.float32)
-                        stream.write(block)
+                            block = block + bed.render(len(block), out_rate)[:, None]
+                        stream.write(self._finish(block))
             except Exception as e:  # noqa: BLE001 - re-raised on the calling thread
                 errors.append(e)
             finally:
@@ -418,6 +433,14 @@ class Player:
         if tail > 0:
             time.sleep(tail)
         on_level(0.0)
+
+
+    def _finish(self, block: np.ndarray) -> np.ndarray:
+        """The output gain, then the soft limiter (always: a clip plus the bed can
+        go over full scale too)."""
+        if self._gain != 1.0:
+            block = block * self._gain
+        return np.ascontiguousarray(soft_limit(block))
 
 
 def _to_channels(mono: np.ndarray, channels: int) -> np.ndarray:

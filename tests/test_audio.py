@@ -394,3 +394,22 @@ def test_mic_closes_the_stream_when_start_fails(monkeypatch):
     assert mic._stream is None
     mic.__exit__(None, None, None)  # a no-op now
     assert stream.events.count("close") == 1
+
+
+def test_soft_limit_leaves_quiet_audio_and_never_clips():
+    quiet = np.array([0.0, 0.3, -0.69], dtype=np.float32)
+    assert np.array_equal(audio.soft_limit(quiet), quiet)
+    loud = np.array([0.8, -1.5, 4.0], dtype=np.float32)
+    out = audio.soft_limit(loud)
+    assert np.all(np.abs(out) <= 1.0) and np.all(np.sign(out) == np.sign(loud))
+    assert out[0] < 0.8 and abs(out[2]) > abs(out[0])  # rounded off, order kept
+
+
+def test_player_output_gain_raises_the_level(monkeypatch):
+    monkeypatch.setitem(sys.modules, "sounddevice", _fake_sd())
+    _fake_clock(monkeypatch)
+    x = np.full(1600, 0.1, dtype=np.float32)
+    audio.Player(None, gain_db=6.0).play(x, 16000, lambda _: None)
+    (stream,) = FakeOutputStream.opened
+    out = np.concatenate(stream.writes)[:, 0]
+    assert np.allclose(out, 0.1 * 10 ** (6 / 20), rtol=1e-4)

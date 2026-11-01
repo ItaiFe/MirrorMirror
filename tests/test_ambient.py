@@ -157,7 +157,7 @@ def test_player_plays_the_bed_between_clips_and_mixes_it_under_a_clip(monkeypatc
     sd.OutputStream = PacedOutputStream
     monkeypatch.setitem(sys.modules, "sounddevice", sd)
     rate = 16000
-    bed = AmbientBed(np.full(rate, 0.5, np.float32), rate, volume_db=0.0, fade_s=0.001)
+    bed = AmbientBed(np.full(rate, 0.4, np.float32), rate, volume_db=0.0, fade_s=0.001)
     player = audio.Player(None, bed=bed)
     player.open(rate)
     (stream,) = FakeOutputStream.opened
@@ -165,12 +165,12 @@ def test_player_plays_the_bed_between_clips_and_mixes_it_under_a_clip(monkeypatc
     while len(stream.writes) < 3 and not deadline.wait(0.01):
         pass
     assert len(stream.writes) >= 3  # the bed plays with no clip
-    clip = np.full(int(0.2 * rate), 0.25, np.float32)
+    clip = np.full(int(0.2 * rate), 0.2, np.float32)
     player.play(clip, rate, lambda _: None)
     player.close()
     out = np.concatenate([w[:, 0] for w in stream.writes])
-    assert np.isclose(out, 0.75).sum() >= len(clip)  # the clip on top of the bed
-    assert np.isclose(out, 0.5).sum() > 0  # bed alone before and after it
+    assert np.isclose(out, 0.6).sum() >= len(clip)  # the clip on top of the bed
+    assert np.isclose(out, 0.4).sum() > 0  # bed alone before and after it
     assert not PacedOutputStream.overlap  # never two writers at once
     assert stream.events[-2:] == ["stop", "close"]
     assert player._bed_thread is None

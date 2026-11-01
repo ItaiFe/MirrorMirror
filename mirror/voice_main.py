@@ -431,7 +431,8 @@ def run(cfg: Config, wav_path=None, config_path=None) -> int:
                       if cfg.lights.kind == "wled" else LogLights())
         bed = build_ambient(cfg.ambient, resolve_repo_path(cfg.ambient.file, config_path))
         output = Player(find_device(cfg.audio.output_device, "output",
-                                    cfg.audio.prefer_alsa_plug), bed=bed)
+                                    cfg.audio.prefer_alsa_plug), bed=bed,
+                        gain_db=cfg.audio.output_gain_db)
         _push_idle(raw_lights, face)
         gate = AnswerGate(raw_lights, ambient=bed)
 

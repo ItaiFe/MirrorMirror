@@ -135,3 +135,8 @@ def test_voice_whisper_defaults_off_and_is_validated(tmp_path):
     for bad in (-0.1, 1.5):
         with pytest.raises(ValueError, match="voice_whisper"):
             TtsConfig(voice_whisper=bad)
+
+
+def test_orin_raises_the_output_gain():
+    assert load_config("config/orin.toml").audio.output_gain_db == 6.0
+    assert load_config("config/mac.toml").audio.output_gain_db == 0.0
