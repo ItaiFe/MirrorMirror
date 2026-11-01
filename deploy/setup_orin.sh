@@ -154,6 +154,10 @@ PYTHON="$VENV/bin/python" WHISPER_QUANTIZE="$BIN/whisper-quantize" \
 
 step "5/8 systemd user units"
 mkdir -p "$UNITS"
+# No PulseAudio: the voice opens the ReSpeaker directly. When the ReSpeaker drops
+# off USB and comes back, PulseAudio grabbed its output first and the voice fell
+# back to the "default" device: the amp got only noise.
+systemctl --user mask --now pulseaudio.socket pulseaudio.service 2>/dev/null || true
 for unit in "${USER_UNITS[@]}"; do
     sed "s|@REPO@|$REPO|g" "$REPO/deploy/systemd/$unit.service" > "$UNITS/$unit.service"
 done
