@@ -13,9 +13,9 @@ stt_language = "he"   # "he": no language detection (~0.6 s faster); "auto" dete
                       # "Mirror, mirror" is re-read as English either way
 
 [tts]
-piper_voice_en = "models/en_US-lessac-medium.onnx"
+piper_voice_en = "models/en_US-oracle-medium.onnx"   # Mira's English voice (trained 2026-11-01, epoch 529)
 he_engine = "phonikud"   # "phonikud" (a G2P + the Phonikud Piper voice) | "mms" (Meta MMS fallback)
-en_voice = "oracle"         # English in the oracle voice (Israeli accent); "lessac": the stock English voice
+en_voice = "lessac"         # "lessac": the Piper voice at piper_voice_en (now Mira's own); "oracle": the Hebrew voice reading English
 he_g2p = "renikud"       # the voice's text->IPA stage: "renikud" (RenikudPlus) | "phonikud"
 renikud_model = "models/renikud-plus.int8.onnx"
 phonikud_model = "models/phonikud-1.0.int8.onnx"
