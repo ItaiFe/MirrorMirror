@@ -120,6 +120,9 @@ class ConversationConfig:
     # the language the mirror speaks: "auto" (the visitor's), or "en" / "he" always
     # (it still understands both); also the greeting, fillers and idle lures
     reply_language: str = "auto"
+    # save every exchange (the visitor's words as transcribed, and the answer) as text,
+    # one JSON-lines file per day in this directory; "" for none
+    transcript_dir: str = ""
     # transcripts whisper was this unsure of (mean log-probability) are ignored: garbled
     # music and noise; None: keep everything
     min_logprob: Optional[float] = None

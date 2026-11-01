@@ -477,8 +477,15 @@ def run(cfg: Config, wav_path=None, config_path=None) -> int:
         unwarmed = warm_llm(llm)
         open_output(output, tts_rate)
         player = LatencyPlayer(output)
+        transcript = None
+        if cfg.conversation.transcript_dir:
+            from mirror.transcript import ConversationLog
+            transcript = ConversationLog(
+                resolve_repo_path(cfg.conversation.transcript_dir, config_path))
+            log.info("saving conversations to %s", cfg.conversation.transcript_dir)
         controller = Controller(stt, llm, tts, player, gate, face, cfg.conversation,
                                 fillers=fillers, lures=lures, laugh=laugh,
+                                transcript=transcript,
                                 first_sentence_timeout_s=cfg.servers.timeout_s)
         for lang in unwarmed:
             controller.mark_unwarmed(lang)

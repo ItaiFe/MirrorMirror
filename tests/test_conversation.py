@@ -1355,3 +1355,16 @@ def test_reply_language_en_lures_in_english():
 def test_reply_language_is_validated():
     with pytest.raises(ValueError):
         ConversationConfig(reply_language="fr")
+
+
+def test_every_exchange_is_saved():
+    saved = []
+
+    class Log:
+        def write(self, heard, reply, lang, **extra):
+            saved.append((heard, reply, lang, extra))
+
+    ctl, p, _ = make([Transcript("Mirror, who is fairest?", "en")])
+    ctl._transcript = Log()
+    ctl.on_segment(SEG)
+    assert saved == [("who is fairest", "Thou art fairest.", "en", {})]

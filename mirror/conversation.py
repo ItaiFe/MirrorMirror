@@ -53,7 +53,7 @@ class Controller:
                  first_sentence_timeout_s: float = 20.0, lures=None,
                  wall_clock: Callable[[], datetime] = datetime.now,
                  rng: Optional[random.Random] = None,
-                 angle_rng: Optional[random.Random] = None, laugh=None):
+                 angle_rng: Optional[random.Random] = None, laugh=None, transcript=None):
         self._stt = stt
         self._llm = llm
         self._tts = tts
@@ -78,6 +78,7 @@ class Controller:
         # idle lures; quiet hours are checked against the local wall clock
         self._lures = lures  # FillerBank of LURES or None
         self._laugh = laugh  # (samples, sr, None): sometimes played instead of a lure
+        self._transcript = transcript  # ConversationLog or None: every exchange, as text
         self._wall_clock = wall_clock
         self._rng = rng or random.Random()
         self._quiet_hours = parse_quiet_hours(cfg.lure_quiet_hours)
@@ -302,6 +303,7 @@ class Controller:
                     # cold, so re-warm both at the next idle ticks
                     for slot_lang in self._last_llm:
                         self.mark_unwarmed(slot_lang)
+                self._save(text, FALLBACK[lang], lang, failed=True)
                 self._speak(FALLBACK[lang], lang)
                 self._go_idle()
                 return
@@ -313,6 +315,7 @@ class Controller:
             for w in workers:
                 w.join()
         log.info("reply (%s): %r", lang, reply)
+        self._save(text, reply, lang)
         self._history.extend([{"role": "user", "content": text},
                               {"role": "assistant", "content": reply}])
         self._history = self._history[-_HISTORY_MAX:]
@@ -425,6 +428,13 @@ class Controller:
                     return
         except Exception as e:  # noqa: BLE001 - handed to the controller thread
             _put(clips, e, cancel)
+
+    def _save(self, heard: str, reply: str, lang: str, **extra) -> None:
+        if self._transcript is not None:
+            try:
+                self._transcript.write(heard, reply, lang, **extra)
+            except Exception:
+                log.exception("saving the conversation failed")
 
     def _speak_lang(self, heard: str) -> str:
         """The language to answer in: the visitor's, unless reply_language fixes it."""
