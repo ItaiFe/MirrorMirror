@@ -939,3 +939,35 @@ def test_whisper_empty_silent_or_short_audio(audio):
 
     out, _ = voice_effect(audio, 22050, None, whisper=1.0)
     assert len(out) == len(audio) and np.all(np.isfinite(out))
+
+
+def test_english_ipa_is_mapped_to_the_oracle_voices_sounds():
+    from mirror.tts import HEBREW_VOICE_SYMBOLS, EnglishAccentG2P, english_to_hebrew_ipa
+
+    assert english_to_hebrew_ipa("həlˈoʊ, stɹˈeɪndʒɚ.") == "helˈo, stʁˈejndʒeʁ."
+    assert english_to_hebrew_ipa("ðˈæt θˈɪŋ") == "dˈet tˈinɡ"
+    g2p = EnglishAccentG2P(espeak=lambda text: "dˈɑːɹlɪŋ, ɐbsəlˈuːtli")
+    assert set(g2p.phonemize("darling, absolutely")) <= HEBREW_VOICE_SYMBOLS
+    assert EnglishAccentG2P(espeak=lambda text: None).phonemize("hi") == ""
+
+
+def test_oracle_english_falls_back_to_lessac_without_espeak(monkeypatch, caplog):
+    import logging
+
+    from mirror import tts
+    from mirror.config import TtsConfig
+    from mirror.voice_main import build_english_tts
+
+    made = []
+    monkeypatch.setattr(tts, "EnglishAccentG2P", lambda: type("G", (), {"phonemize": lambda s, t: ""})())
+    monkeypatch.setattr(tts, "PiperTTS", lambda path: made.append(path) or "lessac")
+    with caplog.at_level(logging.WARNING):
+        assert build_english_tts(TtsConfig(en_voice="oracle")) == "lessac"
+    assert made and "can't speak English" in caplog.text
+
+
+def test_en_voice_is_validated():
+    from mirror.config import TtsConfig
+
+    with pytest.raises(ValueError):
+        TtsConfig(en_voice="robot")

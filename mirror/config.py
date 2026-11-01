@@ -45,6 +45,9 @@ class TtsConfig:
     # "piper" (Piper English + the Hebrew engine above) | "pocket" (Pocket TTS for both
     # languages, Hebrew via RenikudPlus IPA; falls back to piper if it fails to load)
     engine: str = "piper"
+    # the English voice with engine = "piper": "lessac" (piper_voice_en) or "oracle"
+    # (the Hebrew-trained oracle voice reading English, with an Israeli accent)
+    en_voice: str = "lessac"
     pocket_model: str = "models/pocket-tts-english-ipa.onnx"
     pocket_voice: str = "javert"  # a built-in voice; ignored when pocket_voice_file is set
     pocket_voice_file: Optional[str] = None  # a cloned voice (.npy, tools/clone_voice.py)
@@ -58,6 +61,8 @@ class TtsConfig:
     voice_whisper: float = 0.0
 
     def __post_init__(self):
+        if self.en_voice not in ("lessac", "oracle"):
+            raise ValueError(f"tts.en_voice must be lessac or oracle, got {self.en_voice!r}")
         if not 0.6 <= self.voice_speed <= 1.2:
             raise ValueError(f"tts.voice_speed must be 0.6..1.2, got {self.voice_speed!r}")
         if not 0.0 <= self.voice_room <= 1.0:

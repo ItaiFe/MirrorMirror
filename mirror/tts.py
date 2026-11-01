@@ -281,6 +281,10 @@ class PhonikudHebrewTTS:
         self._rate = int(self._voice.config.sample_rate)
         self._tracks = _Tracks(f"hebrew voice {voice_model}")
 
+    @property
+    def sample_rate(self) -> int:
+        return self._rate
+
     def phonemes(self, text: str) -> str:
         """IPA for plain Hebrew text (characters the voice doesn't know are dropped)."""
         return keep_voice_symbols(self._g2p.phonemize(text), self._known)
@@ -408,6 +412,33 @@ class _EspeakIPA:
             self._failed = True
             return None
         return " ".join("".join(s) for s in sentences)
+
+
+# English sounds -> the nearest ones the Hebrew-trained oracle voice knows, so it can
+# speak English (with an Israeli accent). Pairs first, then single symbols.
+_EN_TO_HE_PAIRS = (("oʊ", "o"), ("eɪ", "ej"), ("aɪ", "aj"), ("aʊ", "aw"), ("ɔɪ", "oj"),
+                   ("ɚ", "eʁ"), ("ɝ", "eʁ"), ("ŋ", "nɡ"), ("iə", "ia"))
+_EN_TO_HE = {"ə": "e", "ɜ": "e", "æ": "e", "ɛ": "e", "ʌ": "a", "ɑ": "a", "ɐ": "a", "ɒ": "o",
+             "ɔ": "o", "ɪ": "i", "ᵻ": "i", "ʊ": "u", "ɹ": "ʁ", "r": "ʁ", "θ": "t", "ð": "d",
+             "ɾ": "t", "g": "ɡ", "x": "χ", "ç": "h", "ɫ": "l", "ʍ": "w", "ˌ": "", "ː": "",
+             "ʲ": ""}
+
+
+def english_to_hebrew_ipa(ipa: str) -> str:
+    for a, b in _EN_TO_HE_PAIRS:
+        ipa = ipa.replace(a, b)
+    return "".join(_EN_TO_HE.get(c, c) for c in ipa)
+
+
+class EnglishAccentG2P:
+    """English text -> espeak IPA -> the oracle voice's (Hebrew) sounds: the G2P that
+    lets PhonikudHebrewTTS read English. "" if espeak is unavailable."""
+
+    def __init__(self, espeak=None):
+        self._espeak = espeak if espeak is not None else _EspeakIPA()
+
+    def phonemize(self, text: str) -> str:
+        return english_to_hebrew_ipa(self._espeak(text) or "")
 
 
 class PocketTTS:

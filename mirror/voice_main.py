@@ -273,6 +273,25 @@ def _lights_to_idle(lights) -> None:
         log.exception("shutdown lights push failed")
 
 
+def build_english_tts(tts_cfg: TtsConfig):
+    """The English voice named by tts.en_voice. "oracle" (the Hebrew-trained voice
+    reading English through espeak) falls back to lessac, with a WARNING, if espeak
+    or the voice is unavailable."""
+    from mirror import tts
+
+    if tts_cfg.en_voice == "oracle":
+        try:
+            g2p = tts.EnglishAccentG2P()
+            if not g2p.phonemize("hello"):
+                raise RuntimeError("espeak gave no phonemes")
+            return tts.PhonikudHebrewTTS(tts_cfg.phonikud_model, tts_cfg.phonikud_voice_he,
+                                         tts_cfg.phonikud_voice_config_he, g2p=g2p)
+        except Exception as e:  # noqa: BLE001 - the stock voice still speaks
+            log.warning("the oracle voice can't speak English (%s: %s); using %s",
+                        type(e).__name__, e, tts_cfg.piper_voice_en)
+    return tts.PiperTTS(tts_cfg.piper_voice_en)
+
+
 def build_hebrew_tts(tts_cfg: TtsConfig):
     """The Hebrew engine named by tts.he_engine (with the G2P named by tts.he_g2p)."""
     from mirror import tts
@@ -379,8 +398,9 @@ def build_tts(tts_cfg: TtsConfig):
         except Exception as e:
             log.warning("Pocket TTS (%s) failed to load (%s: %s); falling back to piper",
                         tts_cfg.pocket_model, type(e).__name__, e)
-    log.info("loading TTS voices (Hebrew: %s, G2P %s)", tts_cfg.he_engine, tts_cfg.he_g2p)
-    en_tts = tts.PiperTTS(tts_cfg.piper_voice_en)
+    log.info("loading TTS voices (Hebrew: %s, G2P %s; English: %s)", tts_cfg.he_engine,
+             tts_cfg.he_g2p, tts_cfg.en_voice)
+    en_tts = build_english_tts(tts_cfg)
     router = tts.TTSRouter(en_tts, build_hebrew_tts(tts_cfg), **_effect)
     return router, en_tts.sample_rate, "piper"
 
