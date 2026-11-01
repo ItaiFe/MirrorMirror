@@ -37,13 +37,17 @@ from mirror.wake import is_hallucination, match_wake
     # live on the Orin: the first "מראה" of two was lost
     ("המראה שעל הקיר", ""),
     ("מירו על הוול, מה צופן העתיד?", "מה צופן העתיד"),
+    # live on the Orin: a cut start or a scrap of noise before the wake word
+    ("רא, מרא, על פרסום.", "על פרסום"),
+    ("אירוד מראה מראה שעל הקיר", ""),
+    ("a mirror mirror, who is fairest?", "who is fairest"),
 ])
 def test_matches(text, rem):
     assert match_wake(text).remainder == rem
 
 
 @pytest.mark.parametrize("text", ["the mirror is nice", "hello there", "מה קורה", "",
-                                  "a mirror mirror", "אמר אשר על הקיר",
+                                  "אמר אשר על הקיר", "I like the mirror here",
                                   # near-misses that are real Hebrew words don't wake it
                                   "תראה בגדול אפשר להביא עוד שניים", "מראש", "מורה"])
 def test_no_match(text):

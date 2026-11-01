@@ -52,13 +52,28 @@ def is_hallucination(text: str) -> bool:
     return not norm or norm in _HALLUCINATIONS
 
 
+def _wake_start(tokens: list) -> "int | None":
+    """Where the wake word is: the first word (one "mirror" / "מראה" is enough; live,
+    the first of two was often lost), or the second after one scrap of noise or a cut
+    start ("רא, מרא", "אירוד מראה"), if it is an exact Hebrew spelling or a doubled
+    "mirror" ("a mirror mirror", not "the mirror is nice")."""
+    if tokens and _is_wake_word(tokens[0]):
+        return 0
+    if len(tokens) >= 2 and (tokens[1] in _HEBREW_VARIANTS
+                             or (_is_wake_word(tokens[1]) and len(tokens) >= 3
+                                 and _is_wake_word(tokens[2]))):
+        return 1
+    return None
+
+
 def match_wake(text: str) -> "WakeMatch | None":
     if is_hallucination(text):
         return None
     tokens = normalize(text).split()
-    # One "mirror" / "מראה" wakes it: live, the first of two was often lost or garbled.
-    if not tokens or not _is_wake_word(tokens[0]):
+    start = _wake_start(tokens)
+    if start is None:
         return None
+    tokens = tokens[start:]
     rest = tokens[1:]
     # ivrit-ai writes "mirror" up to 5 times. Only exact spellings count as repeats,
     # so a fuzzy near-miss ("error", "מורה") stays as the question's first word.
