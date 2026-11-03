@@ -8,8 +8,10 @@ _THRESHOLD = 0.75
 # Looser for "mirror" itself: ivrit-ai's Whisper turbo writes "mirer" (0.73).
 _MIRROR_THRESHOLD = 0.7
 # Hebrew only by these exact spellings: a near-miss is a real word ("תראה", look!)
-_HEBREW_VARIANTS = {"מראה", "המראה", "ומראה", "מראא", "מרא", "מירא",
-                    "מירה", "ומירה", "מיירה"}  # מירה: her name, Mira
+_HEBREW_VARIANTS = {"מראה", "המראה", "ומראה", "במראה", "למראה", "שמראה", "כמראה",
+                    "מראא", "מרא", "מירא",
+                    # מירה: her name, Mira ("שמירה", guarding, is left out on purpose)
+                    "מירה", "ומירה", "למירה", "מיירה"}
 # English "mirror" transliterated into Hebrew letters by the Hebrew fine-tune.
 _TRANSLITERATED_MIRROR = {"מיר", "מירור", "מירר", "מירו"}
 # Repeats after the first wake token are stripped only on these exact spellings.

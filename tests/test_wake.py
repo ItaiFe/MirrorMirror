@@ -47,12 +47,14 @@ from mirror.wake import is_hallucination, match_wake
     ("yeah so Mira what's my future", "what s my future"),
     ("כן אז אמרתי לו מראה מה שלומך", "מה שלומך"),
     ("the mirror is nice", "is nice"),
+    ("מה יש במראה הזאת", "הזאת"),
+    ("תגידי למירה שלום", "שלום"),
 ])
 def test_matches(text, rem):
     assert match_wake(text).remainder == rem
 
 
-@pytest.mark.parametrize("text", ["hello there", "מה קורה", "",
+@pytest.mark.parametrize("text", ["hello there", "מה קורה", "", "אני בשמירה הלילה",
                                   "אמר אשר על הקיר", "I like your outfit",
                                   # near-misses that are real Hebrew words don't wake it
                                   "תראה בגדול אפשר להביא עוד שניים", "מראש", "מורה"])
