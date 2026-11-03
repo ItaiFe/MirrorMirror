@@ -53,10 +53,13 @@ def _to_wav_bytes(samples: np.ndarray, sr: int) -> bytes:
 
 
 class WhisperServerSTT:
-    def __init__(self, url: str, timeout_s: float, language: str = "auto"):
+    def __init__(self, url: str, timeout_s: float, language: str = "auto", prompt: str = ""):
         self._endpoint = url.rstrip("/") + "/inference"
         self._timeout_s = timeout_s
         self._language = language  # the default for transcribe()
+        # whisper's initial prompt: words it should expect (the wake words), so in noise
+        # it writes them right instead of something that sounds alike
+        self._prompt = prompt
 
     def transcribe(self, samples: np.ndarray, sr: int = 16000,
                    language: str | None = None) -> Transcript:
@@ -70,7 +73,7 @@ class WhisperServerSTT:
                 self._endpoint,
                 files={"file": ("speech.wav", wav, "audio/wav")},
                 data={"response_format": "verbose_json", "language": language,
-                      "temperature": "0"},
+                      "temperature": "0", **({"prompt": self._prompt} if self._prompt else {})},
                 timeout=self._timeout_s,
             )
             resp.raise_for_status()

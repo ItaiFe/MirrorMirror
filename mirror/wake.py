@@ -8,11 +8,17 @@ _THRESHOLD = 0.75
 # Looser for "mirror" itself: ivrit-ai's Whisper turbo writes "mirer" (0.73).
 _MIRROR_THRESHOLD = 0.7
 # Hebrew only by these exact spellings: a near-miss is a real word ("תראה", look!)
-_HEBREW_VARIANTS = {"מראה", "המראה", "ומראה", "מראא", "מרא", "מירא"}
+_HEBREW_VARIANTS = {"מראה", "המראה", "ומראה", "מראא", "מרא", "מירא",
+                    "מירה", "ומירה", "מיירה"}  # מירה: her name, Mira
 # English "mirror" transliterated into Hebrew letters by the Hebrew fine-tune.
 _TRANSLITERATED_MIRROR = {"מיר", "מירור", "מירר", "מירו"}
 # Repeats after the first wake token are stripped only on these exact spellings.
-_REPEAT_WORDS = {"mirror", "mirrors"} | _TRANSLITERATED_MIRROR | _HEBREW_VARIANTS
+# Her name in Latin letters, as whisper writes it
+_ENGLISH_NAMES = {"mira", "meera", "mirah", "miera"}
+_REPEAT_WORDS = {"mirror", "mirrors"} | _ENGLISH_NAMES | _TRANSLITERATED_MIRROR | _HEBREW_VARIANTS
+# Spelled exactly like this, the wake word counts anywhere in what was heard: in noise
+# a scrap of background talk often comes before it ("…yeah Mira what's my future")
+_EXACT_WAKE = _REPEAT_WORDS
 _TAILS = (("on", "the", "wall"), ("שעל", "הקיר"), ("על", "הקיר"),
           # English "on the wall" in Hebrew letters (heard live: "מירר מירר על הוול")
           ("און", "דה", "וול"), ("על", "הוול"), ("על", "דה", "וול"))
@@ -41,8 +47,7 @@ def _close(a: str, b: str, threshold: float = _THRESHOLD) -> bool:
 
 
 def _is_wake_word(token: str) -> bool:
-    return (_close(token, "mirror", _MIRROR_THRESHOLD) or token in _TRANSLITERATED_MIRROR
-            or token in _HEBREW_VARIANTS)
+    return (_close(token, "mirror", _MIRROR_THRESHOLD) or token in _EXACT_WAKE)
 
 
 def is_hallucination(text: str) -> bool:
@@ -53,16 +58,15 @@ def is_hallucination(text: str) -> bool:
 
 
 def _wake_start(tokens: list) -> "int | None":
-    """Where the wake word is: the first word (one "mirror" / "מראה" is enough; live,
-    the first of two was often lost), or the second after one scrap of noise or a cut
-    start ("רא, מרא", "אירוד מראה"), if it is an exact Hebrew spelling or a doubled
-    "mirror" ("a mirror mirror", not "the mirror is nice")."""
+    """Where the wake word is: the first word, matched loosely ("mirer"; one "mirror" /
+    "מראה" / "Mira" is enough), or the first exact spelling anywhere after it: in the
+    noise of a festival, background talk often comes first ("רא, מרא", "אירוד מראה",
+    "yeah so Mira what's my future"). The trade-off: "the mirror is nice" wakes it too."""
     if tokens and _is_wake_word(tokens[0]):
         return 0
-    if len(tokens) >= 2 and (tokens[1] in _HEBREW_VARIANTS
-                             or (_is_wake_word(tokens[1]) and len(tokens) >= 3
-                                 and _is_wake_word(tokens[2]))):
-        return 1
+    for i, token in enumerate(tokens[1:], start=1):
+        if token in _EXACT_WAKE:
+            return i
     return None
 
 

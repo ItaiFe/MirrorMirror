@@ -223,3 +223,13 @@ def test_logprob_is_the_mean_over_spoken_segments():
 def test_logprob_none_without_segments():
     responses.post(URL + "/inference", json={"text": "hi", "language": "english"})
     assert make().transcribe(SAMPLES).logprob is None
+
+
+@responses.activate
+def test_the_prompt_is_sent_when_set():
+    responses.post(URL + "/inference", json={"text": "Mira", "language": "english"})
+    WhisperServerSTT(URL, 5, prompt="Mira, mirror, מראה.").transcribe(SAMPLES)
+    assert b"Mira, mirror" in responses.calls[0].request.body
+    responses.post(URL + "/inference", json={"text": "hi", "language": "english"})
+    WhisperServerSTT(URL, 5).transcribe(SAMPLES)
+    assert b'name="prompt"' not in responses.calls[1].request.body

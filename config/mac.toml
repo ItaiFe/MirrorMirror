@@ -11,6 +11,7 @@ llm_url = "http://127.0.0.1:8080"
 timeout_s = 20
 stt_language = "he"   # "he": no language detection (~0.6 s faster); "auto" detects. An English
                       # "Mirror, mirror" is re-read as English either way
+stt_prompt = "Mira, mirror, מראה."   # whisper expects the wake words, so it hears them right in noise
 
 [tts]
 piper_voice_en = "models/en_US-oracle-medium.onnx"   # Mira's English voice (trained 2026-11-01, epoch 529)

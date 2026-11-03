@@ -30,6 +30,7 @@ class ServersConfig:
     # whisper-server's language: "auto" detects it (~0.6 s more per request on an M2);
     # "he" skips that (most visitors speak Hebrew; an English wake is re-read as English)
     stt_language: str = "auto"
+    stt_prompt: str = ""  # whisper's initial prompt: the wake words, so it hears them right
 
 
 @dataclass

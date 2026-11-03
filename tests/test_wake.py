@@ -26,7 +26,7 @@ from mirror.wake import is_hallucination, match_wake
     ("mirror mirror minor key", "minor key"),
     ("מראה מראה מורה אמרה לי", "מורה אמרה לי"),
     ("מראה מראה מראש", "מראש"),
-    ("מראה מראה מירה", "מירה"),
+    ("מראה מראה מירה", ""),  # מירה is her name now, a wake word
     # one wake word is enough
     ("mirror", ""),
     ("מיר", ""),
@@ -41,13 +41,19 @@ from mirror.wake import is_hallucination, match_wake
     ("רא, מרא, על פרסום.", "על פרסום"),
     ("אירוד מראה מראה שעל הקיר", ""),
     ("a mirror mirror, who is fairest?", "who is fairest"),
+    # her name, and the wake word after background talk (noise at a festival)
+    ("Mira, what's my future?", "what s my future"),
+    ("מירה, מה העתיד שלי?", "מה העתיד שלי"),
+    ("yeah so Mira what's my future", "what s my future"),
+    ("כן אז אמרתי לו מראה מה שלומך", "מה שלומך"),
+    ("the mirror is nice", "is nice"),
 ])
 def test_matches(text, rem):
     assert match_wake(text).remainder == rem
 
 
-@pytest.mark.parametrize("text", ["the mirror is nice", "hello there", "מה קורה", "",
-                                  "אמר אשר על הקיר", "I like the mirror here",
+@pytest.mark.parametrize("text", ["hello there", "מה קורה", "",
+                                  "אמר אשר על הקיר", "I like your outfit",
                                   # near-misses that are real Hebrew words don't wake it
                                   "תראה בגדול אפשר להביא עוד שניים", "מראש", "מורה"])
 def test_no_match(text):
